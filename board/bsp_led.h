@@ -1,0 +1,38 @@
+#ifndef __BSP_LED_H__
+#define __BSP_LED_H__
+
+
+
+#define FLASH_TRIGER_GPIO_PIN			GPIO_PIN_6
+#define FLASH_TRIGER_GPIO			  	GPIOA
+#define ALARM_CONTROL_GPIO_PIN			GPIO_PIN_1
+#define ALARM_CONTROL_GPIO			  	GPIOA
+
+#define TEMP_INIT_GPIO_PIN				GPIO_PIN_8
+#define TEMP_INIT_GPIO			  		GPIOB
+
+#define LM92CIM_AA0_GPIO_PIN				GPIO_PIN_8
+#define LM92CIM_AA0_GPIO			  		GPIOD
+#define LM92CIM_AA1_GPIO_PIN				GPIO_PIN_9
+#define LM92CIM_AA1_GPIO			  		GPIOD
+
+#define MAX5477_A0_GPIO_PIN					GPIO_PIN_12
+#define MAX5477_A0_GPIO			  			GPIOD
+#define MAX5477_A1_GPIO_PIN					GPIO_PIN_11
+#define MAX5477_A1_GPIO			  			GPIOD
+#define MAX5477_A2_GPIO_PIN					GPIO_PIN_10
+#define MAX5477_A2_GPIO			  			GPIOD
+#define MAX5477_WP_GPIO_PIN					GPIO_PIN_13
+#define MAX5477_WP_GPIO			  			GPIOD
+
+#define X9C103_INC_GPIO_PIN					GPIO_PIN_9
+#define X9C103_INC_GPIO			  			GPIOE
+#define X9C103_UD_GPIO_PIN					GPIO_PIN_11
+#define X9C103_UD_GPIO			  			GPIOE
+#define X9C103_CS_GPIO_PIN					GPIO_PIN_13
+#define X9C103_CS_GPIO			  			GPIOE
+
+
+
+
+#endif

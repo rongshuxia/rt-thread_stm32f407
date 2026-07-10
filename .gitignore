@@ -1,0 +1,39 @@
+# ===== Keil MDK 编译输出 =====
+project/obj/
+project/list/
+project/*.hex
+project/*.axf
+project/*.elf
+project/*.bin
+project/*.map
+project/*.lnp
+project/*.dep
+project/*.htm
+project/*.build_log.htm
+project/build*.log
+project/JLinkLog.txt
+project/JLinkSettings.ini
+
+# Keil 用户本地配置（窗口布局、调试断点等，每人不同）
+project/*.uvguix.*
+project/*.uvoptx
+
+# ===== 通用 C/嵌入式编译产物 =====
+*.o
+*.obj
+*.d
+*.crf
+*.lst
+*.iex
+*.sct
+
+# ===== IDE / 编辑器 =====
+.vscode/
+.idea/
+*.swp
+*~
+
+# ===== 系统 / 工具 =====
+.DS_Store
+Thumbs.db
+.claude/
