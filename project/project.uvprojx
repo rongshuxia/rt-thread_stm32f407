@@ -339,7 +339,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER, STM32F407xx</Define>
               <Undefine></Undefine>
-              <IncludePath>..\libcpu\arm\cortex-m4;..\libcpu\arm\common;..\components\drivers\include;..\components\drivers\include;..\components\drivers\include;..\board;..\board\ports;..\board\libraries\HAL_Drivers;..\board\libraries\HAL_Drivers\config;..\components\finsh;..\components\libc\compilers\common;..\components\net\lwip-1.4.1\src;..\components\net\lwip-1.4.1\src\include;..\components\net\lwip-1.4.1\src\include\ipv4;..\components\net\lwip-1.4.1\src\arch\include;..\components\net\lwip-1.4.1\src\include\netif;..\board\libraries\STM32F4xx_HAL\STM32F4xx_HAL_Driver\Inc;..\board\libraries\STM32F4xx_HAL\CMSIS\Device\ST\STM32F4xx\Include;..\board\libraries\STM32F4xx_HAL\CMSIS\Include;..\applications;..\board;..\board\ATK_MC2640;..\os\include;..\board\ILI9341;..\board\lvgl;..\board\lvgl\lvgl</IncludePath>
+              <IncludePath>..\libcpu\arm\cortex-m4;..\libcpu\arm\common;..\components\drivers\include;..\components\drivers\include;..\components\drivers\include;..\board;..\board\ports;..\board\libraries\HAL_Drivers;..\board\libraries\HAL_Drivers\config;..\components\finsh;..\components\libc\compilers\common;..\components\net\lwip-1.4.1\src;..\components\net\lwip-1.4.1\src\include;..\components\net\lwip-1.4.1\src\include\ipv4;..\components\net\lwip-1.4.1\src\arch\include;..\components\net\lwip-1.4.1\src\include\netif;..\board\libraries\STM32F4xx_HAL\STM32F4xx_HAL_Driver\Inc;..\board\libraries\STM32F4xx_HAL\CMSIS\Device\ST\STM32F4xx\Include;..\board\libraries\STM32F4xx_HAL\CMSIS\Include;..\applications;..\board;..\board\ATK_MC2640;..\os\include;..\board\ILI9341;..\board\lvgl;..\board\lvgl\lvgl;..\board\rtt</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -394,14 +394,9 @@
               <FilePath>..\applications\eth_camera.c</FilePath>
             </File>
             <File>
-              <FileName>datalink.c</FileName>
+              <FileName>app_ui.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\applications\datalink.c</FilePath>
-            </File>
-            <File>
-              <FileName>boot_scr.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\applications\boot_scr.c</FilePath>
+              <FilePath>..\applications\app_ui.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -437,6 +432,21 @@
               <FileName>bsp_adc.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\board\bsp_adc.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>RTT</GroupName>
+          <Files>
+            <File>
+              <FileName>SEGGER_RTT.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\board\rtt\SEGGER_RTT.c</FilePath>
+            </File>
+            <File>
+              <FileName>rtt_log.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\board\rtt\rtt_log.c</FilePath>
             </File>
           </Files>
         </Group>

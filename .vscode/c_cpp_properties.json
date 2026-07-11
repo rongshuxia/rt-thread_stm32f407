@@ -1,0 +1,43 @@
+{
+    "configurations": [
+        {
+            "name": "STM32F407 (Keil)",
+            "includePath": [
+                "${workspaceFolder}/libcpu/arm/cortex-m4",
+                "${workspaceFolder}/libcpu/arm/common",
+                "${workspaceFolder}/components/drivers/include",
+                "${workspaceFolder}/board",
+                "${workspaceFolder}/board/ports",
+                "${workspaceFolder}/board/libraries/HAL_Drivers",
+                "${workspaceFolder}/board/libraries/HAL_Drivers/config",
+                "${workspaceFolder}/components/finsh",
+                "${workspaceFolder}/components/libc/compilers/minilibc",
+                "${workspaceFolder}/components/libc/compilers/common",
+                "${workspaceFolder}/components/net/lwip-1.4.1/src",
+                "${workspaceFolder}/components/net/lwip-1.4.1/src/include",
+                "${workspaceFolder}/components/net/lwip-1.4.1/src/include/ipv4",
+                "${workspaceFolder}/components/net/lwip-1.4.1/src/arch/include",
+                "${workspaceFolder}/components/net/lwip-1.4.1/src/include/netif",
+                "${workspaceFolder}/board/libraries/STM32F4xx_HAL/STM32F4xx_HAL_Driver/Inc",
+                "${workspaceFolder}/board/libraries/STM32F4xx_HAL/CMSIS/Device/ST/STM32F4xx/Include",
+                "${workspaceFolder}/board/libraries/STM32F4xx_HAL/CMSIS/Include",
+                "${workspaceFolder}/applications",
+                "${workspaceFolder}/board/ATK_MC2640",
+                "${workspaceFolder}/os/include",
+                "${workspaceFolder}/board/ILI9341",
+                "${workspaceFolder}/board/lvgl",
+                "${workspaceFolder}/board/lvgl/lvgl"
+            ],
+            "defines": [
+                "USE_HAL_DRIVER",
+                "STM32F407xx",
+                "__ARMCC_VERSION=6100100"
+            ],
+            "compilerPath": "",
+            "cStandard": "c99",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "gcc-arm"
+        }
+    ],
+    "version": 4
+}

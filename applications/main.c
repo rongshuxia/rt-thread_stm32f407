@@ -2,15 +2,17 @@
 #include <rtdevice.h>
 #include <board.h>
 #include "eth_camera.h"
-#include "datalink.h"
 #include <lwip/sockets.h>
 #include "lv_port.h"
+#include "rtt_log.h"
 
 
 int main(void)
 {
 	static ip_addr_t ipaddr;
     uint8_t ip_addr[4];
+
+    RTT_LOG_I("boot");
 
 	ipaddr.addr = inet_addr(RT_LWIP_IPADDR);
 
@@ -23,11 +25,12 @@ int main(void)
     /* Bring up LVGL in its own thread - won't block eth_camera. */
     lv_port_init();
 
-    rt_thread_mdelay(500);
-    rt_kprintf("Camera IP:%d.%d.%d.%d - Video:%d Config:%d\r\n",
-               ip_addr[0], ip_addr[1], ip_addr[2], ip_addr[3], ETH_PORT, DATALINK_PORT);
+    /* Let tcpip + PHY link settle before starting the camera server thread. */
+    rt_thread_mdelay(3000);
+    RTT_LOG_I("Camera IP:%d.%d.%d.%d  Video:%d",
+              ip_addr[0], ip_addr[1], ip_addr[2], ip_addr[3], ETH_PORT);
 
-    datalink_init();
+    eth_camera_capture();
 
-	eth_camera_capture();
+    return 0;
 }

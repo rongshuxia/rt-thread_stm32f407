@@ -8,7 +8,6 @@
  */
 
 #include "lv_port.h"
-#include "boot_scr.h"
 #include "lvgl.h"
 #include "ili9341.h"
 
@@ -84,8 +83,6 @@ static void lvgl_thread_entry(void *p)
 
 void lv_port_init(void)
 {
-    boot_scr_preinit();
-
     rt_thread_t tid = rt_thread_create("lvgl",
                                        lvgl_thread_entry, RT_NULL,
                                        LV_THREAD_STACK_SIZE,

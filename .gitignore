@@ -28,7 +28,9 @@ project/*.uvoptx
 *.sct
 
 # ===== IDE / 编辑器 =====
-.vscode/
+.vscode/*
+!.vscode/c_cpp_properties.json
+!.vscode/settings.json
 .idea/
 *.swp
 *~
