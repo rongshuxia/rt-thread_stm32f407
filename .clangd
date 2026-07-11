@@ -18,11 +18,11 @@ CompileFlags:
     - -Icomponents/finsh
     - -Icomponents/libc/compilers/minilibc
     - -Icomponents/libc/compilers/common
-    - -Icomponents/net/lwip-1.4.1/src
-    - -Icomponents/net/lwip-1.4.1/src/include
-    - -Icomponents/net/lwip-1.4.1/src/include/ipv4
-    - -Icomponents/net/lwip-1.4.1/src/arch/include
-    - -Icomponents/net/lwip-1.4.1/src/include/netif
+    - -Icomponents/net/lwip-2.1.2/src
+    - -Icomponents/net/lwip-2.1.2/src/include
+    - -Icomponents/net/lwip-2.1.2/src/arch/include
+    - -Icomponents/net/lwip-2.1.2/src/include/netif
+    - -Icomponents/net/lwip-2.1.2/src/include/compat/posix
     - -Iboard/libraries/STM32F4xx_HAL/STM32F4xx_HAL_Driver/Inc
     - -Iboard/libraries/STM32F4xx_HAL/CMSIS/Device/ST/STM32F4xx/Include
     - -Iboard/libraries/STM32F4xx_HAL/CMSIS/Include

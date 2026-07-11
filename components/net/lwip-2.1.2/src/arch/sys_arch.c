@@ -642,7 +642,7 @@ u32_t sys_jiffies(void)
 
 u32_t sys_now(void)
 {
-    return rt_tick_get_millisecond();
+    return (u32_t)(rt_tick_get() * 1000UL / RT_TICK_PER_SECOND);
 }
 
 #if MEM_OVERFLOW_CHECK || MEMP_OVERFLOW_CHECK
