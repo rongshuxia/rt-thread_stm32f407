@@ -11,13 +11,14 @@
 #include <lwip/netif.h>
 #include <lwip/ip4_addr.h>
 
-#define UI_TXT_CONNECTED     "\xE5\xB7\xB2\xE8\xBF\x9E\xE6\x8E\xA5"
-#define UI_TXT_CONNECTING    "\xE8\xBF\x9E\xE6\x8E\xA5\xE4\xB8\xAD"
-#define UI_TXT_DISCONNECTED  "\xE5\xB7\xB2\xE6\x96\xAD\xE5\xBC\x80"
-#define UI_TXT_NO_CONN       "\xE6\x9C\xAA\xE8\xBF\x9E\xE6\x8E\xA5"
-#define UI_TXT_CONNECTING_IP "\xE8\xBF\x9E\xE6\x8E\xA5\xE4\xB8\xAD..."
+/* 界面文案（UTF-8 字节序列，避免源文件编码依赖） */
+#define UI_TXT_CONNECTED     "\xE5\xB7\xB2\xE8\xBF\x9E\xE6\x8E\xA5"       /* 已连接 */
+#define UI_TXT_CONNECTING    "\xE8\xBF\x9E\xE6\x8E\xA5\xE4\xB8\xAD"       /* 连接中 */
+#define UI_TXT_DISCONNECTED  "\xE5\xB7\xB2\xE6\x96\xAD\xE5\xBC\x80"       /* 已断开 */
+#define UI_TXT_NO_CONN       "\xE6\x9C\xAA\xE8\xBF\x9E\xE6\x8E\xA5"       /* 未连接 */
+#define UI_TXT_CONNECTING_IP "\xE8\xBF\x9E\xE6\x8E\xA5\xE4\xB8\xAD..."    /* 连接中... */
 
-#define UI_REFRESH_MS        500
+#define UI_REFRESH_MS        500   /* 定时轮询 lwIP netif 状态的间隔 */
 
 /* Palette */
 #define UI_CLR_BG_TOP        0x1A1F2C
@@ -48,6 +49,7 @@ static lv_style_t style_divider;
 static lv_style_t style_footer;
 static bool styles_ready;
 
+/* 一次性初始化 LVGL 样式，styles_ready 防止重复注册 */
 static void network_gui_init_styles(void)
 {
     if (styles_ready)
@@ -118,6 +120,7 @@ static void network_gui_init_styles(void)
     styles_ready = true;
 }
 
+/* 更新状态指示灯颜色及同色阴影 */
 void network_gui_set_led_color(uint32_t color_hex)
 {
     if (status_led == RT_NULL)
@@ -129,6 +132,7 @@ void network_gui_set_led_color(uint32_t color_hex)
     lv_obj_set_style_shadow_color(status_led, lv_color_hex(color_hex), LV_PART_MAIN);
 }
 
+/* 同步状态文字与 LED 颜色（绿/橙/红） */
 void network_gui_set_status(net_ui_status_t status)
 {
     const char *text;
@@ -159,6 +163,7 @@ void network_gui_set_status(net_ui_status_t status)
     network_gui_set_led_color(led_color);
 }
 
+/* 更新 IP 显示；NULL 时显示“未连接” */
 void network_gui_set_ip(const char *ip_text)
 {
     if (ip_label == RT_NULL)
@@ -169,6 +174,7 @@ void network_gui_set_ip(const char *ip_text)
     lv_label_set_text(ip_label, (ip_text != RT_NULL) ? ip_text : UI_TXT_NO_CONN);
 }
 
+/* 卡片内水平分隔线 */
 static lv_obj_t *network_gui_create_divider(lv_obj_t *parent, lv_coord_t w, lv_coord_t h)
 {
     lv_obj_t *line = lv_obj_create(parent);
@@ -181,6 +187,15 @@ static lv_obj_t *network_gui_create_divider(lv_obj_t *parent, lv_coord_t w, lv_c
     return line;
 }
 
+/*
+ * 构建网络状态界面，层级：
+ *   scr (渐变背景, flex 居中)
+ *     └── card_panel
+ *           ├── title / divider
+ *           ├── ip_caption + ip_label / divider
+ *           ├── status_row (LED + status_label)
+ *           └── footer
+ */
 void create_network_gui(void)
 {
     lv_obj_t *scr;
@@ -191,6 +206,7 @@ void create_network_gui(void)
 
     network_gui_init_styles();
 
+    /* 全屏根容器：纵向 flex，内容居中 */
     scr = lv_scr_act();
     lv_obj_remove_style_all(scr);
     lv_obj_add_style(scr, &style_scr, LV_PART_MAIN);
@@ -200,6 +216,7 @@ void create_network_gui(void)
     lv_obj_set_style_pad_all(scr, 16, LV_PART_MAIN);
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
+    /* 主卡片：左右各留 16px 边距 */
     card_panel = lv_obj_create(scr);
     lv_obj_remove_style_all(card_panel);
     lv_obj_add_style(card_panel, &style_card, LV_PART_MAIN);
@@ -227,6 +244,7 @@ void create_network_gui(void)
 
     network_gui_create_divider(card_panel, lv_pct(100), 1);
 
+    /* 状态行：圆点 LED + 中文状态文字，横向排列 */
     status_row = lv_obj_create(card_panel);
     lv_obj_remove_style_all(status_row);
     lv_obj_set_size(status_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -247,6 +265,7 @@ void create_network_gui(void)
     lv_obj_add_style(status_label, &style_status, LV_PART_MAIN);
     lv_label_set_text(status_label, UI_TXT_DISCONNECTED);
 
+    /* 底部显示分辨率与 eth_camera 监听端口 */
     footer = lv_label_create(card_panel);
     lv_obj_add_style(footer, &style_footer, LV_PART_MAIN);
     lv_label_set_text_fmt(footer, "320x240 · Port %d", ETH_PORT);
@@ -255,6 +274,12 @@ void create_network_gui(void)
     network_gui_set_ip(UI_TXT_NO_CONN);
 }
 
+/*
+ * 从 lwIP 默认 netif 读取链路/IP 状态并刷新界面：
+ *   链路 down          → 已断开 / 未连接
+ *   链路 up、无 IP     → 连接中 / 连接中...
+ *   链路 up、已获 IP   → 已连接 / 实际 IP
+ */
 void network_gui_refresh(void)
 {
     net_ui_status_t status = NET_UI_DISCONNECTED;
@@ -278,12 +303,14 @@ void network_gui_refresh(void)
     network_gui_set_ip(ip_text);
 }
 
+/* LVGL 定时器回调，周期性调用 network_gui_refresh */
 static void network_gui_refresh_cb(lv_timer_t *timer)
 {
     network_gui_refresh();
     (void)timer;
 }
 
+/* LVGL 线程入口：建界面后立即刷新一次，再启动定时轮询 */
 void lv_user_app(void)
 {
     lv_timer_t *refresh_timer;
@@ -292,5 +319,5 @@ void lv_user_app(void)
     network_gui_refresh();
 
     refresh_timer = lv_timer_create(network_gui_refresh_cb, UI_REFRESH_MS, RT_NULL);
-    lv_timer_set_repeat_count(refresh_timer, -1);
+    lv_timer_set_repeat_count(refresh_timer, -1);  /* -1 = 无限重复 */
 }

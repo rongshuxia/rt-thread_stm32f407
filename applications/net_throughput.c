@@ -1,11 +1,20 @@
 /*
- * TCP throughput test for STM32 Ethernet.
+ * STM32 以太网 TCP 吞吐测试。
  *
- * Usage (MSH):
- *   netperf s [port] [sec]          board as TCP server (PC sends)
- *   netperf c <host> [port] [sec]   board as TCP client (PC receives)
+ * 用途: 测量板端 lwIP TCP 栈的收发带宽，与 eth_camera 推流独立。
  *
- * PC companion: tool/netperf_pc.py
+ * MSH 命令:
+ *   netperf s [port] [sec]          板子做 Server，PC 发数据 (测 RX)
+ *   netperf c <host> [port] [sec]   板子做 Client，PC 收数据 (测 TX)
+ *
+ * PC 端配套: tool/netperf_pc.py
+ *   Server 模式: python netperf_pc.py client <board_ip> [port] [sec]
+ *   Client 模式: python netperf_pc.py server [port] [sec]
+ *
+ * 缓冲: ccm_netperf_buf (CCM 4 KB)，与 LVGL 绘制缓冲共用 ccmram_bufs 结构体，
+ *       避免占用主 SRAM。测试期间勿与 LVGL 并发跑 netperf。
+ *
+ * 速率打印: 纯整数运算输出 Mbit/s，避免嵌入式 printf 浮点。
  */
 
 #include "net_throughput.h"
@@ -18,8 +27,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define NETPERF_REPORT_MS       1000
+#define NETPERF_REPORT_MS       1000   /* 每秒打印一次区间/累计吞吐量 */
 
+/* 填充 CCM 测试缓冲为 0x00~0xFF 循环模式，便于 PC 端校验 */
 static void netperf_fill_buf(void)
 {
     rt_size_t i;
@@ -30,6 +40,10 @@ static void netperf_fill_buf(void)
     }
 }
 
+/*
+ * 打印吞吐量 (RTT 日志)。
+ * Mbit/s * 100 = bytes * 8 / elapsed_s * 100 = bytes * 80 / elapsed_ms / 100
+ */
 static void netperf_print_rate(const char *tag, rt_uint32_t total_bytes, rt_uint32_t elapsed_ms)
 {
     rt_uint32_t mbps_x100;
@@ -39,7 +53,6 @@ static void netperf_print_rate(const char *tag, rt_uint32_t total_bytes, rt_uint
         elapsed_ms = 1;
     }
 
-    /* Mbit/s * 100 = bytes * 80 / elapsed_ms / 100 (纯整数，避免 %f) */
     mbps_x100 = (rt_uint32_t)(((rt_uint64_t)total_bytes * 80ULL) / elapsed_ms / 100ULL);
 
     RTT_LOG_I("%s: %u bytes in %u.%03u s, %u.%02u Mbit/s",
@@ -51,6 +64,10 @@ static void netperf_print_rate(const char *tag, rt_uint32_t total_bytes, rt_uint
               mbps_x100 % 100U);
 }
 
+/*
+ * 等待 lwIP 默认 netif 就绪，最多 10 s。
+ * @return 0 成功; -1 超时
+ */
 static int netperf_wait_link(void)
 {
     rt_tick_t start = rt_tick_get();
@@ -68,6 +85,16 @@ static int netperf_wait_link(void)
     return 0;
 }
 
+/*
+ * TCP Server 模式: 监听端口，接受 PC 连接后持续 recv，统计 RX 吞吐。
+ *
+ * 典型用法: 板子 netperf s -> PC python netperf_pc.py client <ip>
+ * 测试时长到或连接断开时结束，打印 final 速率。
+ *
+ * @param port          监听端口，<=0 用 NETPERF_PORT_DEFAULT (5002)
+ * @param duration_sec  测试秒数，<=0 用 NETPERF_DURATION_SEC (10)
+ * @return 0 成功; -1 失败 (网卡未就绪/绑定失败/accept 超时等)
+ */
 int netperf_tcp_server(int port, int duration_sec)
 {
     int listen_fd = -1;
@@ -128,6 +155,7 @@ int netperf_tcp_server(int port, int duration_sec)
     RTT_LOG_I("waiting PC connect %ds, run: python netperf_pc.py client 192.168.188.18",
               NETPERF_ACCEPT_TIMEOUT_SEC);
 
+    /* 带超时的 accept: 每秒 select 一次，避免无限阻塞 */
     {
         rt_tick_t wait_start = rt_tick_get();
         fd_set readfds;
@@ -201,6 +229,16 @@ int netperf_tcp_server(int port, int duration_sec)
     return 0;
 }
 
+/*
+ * TCP Client 模式: 连接 PC 后持续 send，统计 TX 吞吐。
+ *
+ * 典型用法: PC python netperf_pc.py server -> 板子 netperf c <pc_ip>
+ *
+ * @param host          PC IP 或主机名
+ * @param port          目标端口
+ * @param duration_sec  测试秒数
+ * @return 0 成功; -1 失败
+ */
 int netperf_tcp_client(const char *host, int port, int duration_sec)
 {
     int sock_fd = -1;
@@ -301,6 +339,7 @@ int netperf_tcp_client(const char *host, int port, int duration_sec)
 #ifdef RT_USING_FINSH
 #include <finsh.h>
 
+/* MSH 命令入口: netperf s / netperf c */
 static int netperf(int argc, char **argv)
 {
     int port = NETPERF_PORT_DEFAULT;

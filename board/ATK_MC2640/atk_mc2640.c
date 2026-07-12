@@ -1,21 +1,19 @@
-/**
- ****************************************************************************************************
- * @file        atk_mc2640.c
- * @author      ����ԭ���Ŷ�(ALIENTEK)
- * @version     V1.0
- * @date        2022-06-21
- * @brief       ATK-MC2640ģ����������
- * @license     Copyright (c) 2020-2032, �������������ӿƼ����޹�˾
- ****************************************************************************************************
- * @attention
+/*
+ * ATK-MC2640 (OV2640) 摄像头驱动。
  *
- * ʵ��ƽ̨:����ԭ�� ̽���� F407������
- * ������Ƶ:www.yuanzige.com
- * ������̳:www.openedv.com
- * ��˾��ַ:www.alientek.com
- * �����ַ:openedv.taobao.com
+ * 基于正点原子 ATK-MC2640 例程，本工程配置:
+ *   ATK_MC2640_USING_DCMI = 1  — 通过 STM32 DCMI + DMA 采集 DVP 数据
+ *   ATK_MC2640_LED_CTL_BY_OV2640 = 1 — 补光灯由传感器寄存器控制
  *
- ****************************************************************************************************
+ * 硬件接口:
+ *   SCCB (类 I2C) — 传感器寄存器配置，见 atk_mc2640_sccb.c
+ *   DVP 8 位并行  — VSYNC/HREF/PCLK + D0-D7，经 DCMI 入 MCU
+ *   RST / PWDN    — PG15 / PD3 硬件复位与掉电
+ *
+ * 数据路径 (DCMI 模式):
+ *   OV2640 JPEG 输出 -> DCMI -> DMA -> 用户缓冲 (eth_camera 用 32B_INC)
+ *
+ * 寄存器表 (UXGA/JPEG/RGB565 等) 见 atk_mc2640_cfg.c。
  */
 
 #include "atk_mc2640.h"
@@ -24,26 +22,22 @@
 #include "stm32f4xx_hal.h"
 #include "stm32f4_delay.h"
 
-#if (ATK_MC2640_USING_DCMI == 0)
-//#include "./MALLOC/malloc.h"
-#endif
-
 #if (ATK_MC2640_USING_DCMI != 0)
 #include "atk_mc2640_dcmi.h"
 #endif
 
-/* ATK-MC2640ģ��������ID�Ͳ�ƷID */
+/* OV2640 制造商 ID / 产品 ID，init 时校验 */
 #define ATK_MC2640_MID  0x7FA2
 #define ATK_MC2640_PID  0x2642
 
-/* ATK-MC2640�Ĵ�����ö�� */
+/* OV2640 寄存器分 Bank: DSP 与 Sensor */
 typedef enum
 {
-    ATK_MC2640_REG_BANK_DSP = 0x00, /* DSP�Ĵ����� */
-    ATK_MC2640_REG_BANK_SENSOR,     /* Sensor�Ĵ����� */
+    ATK_MC2640_REG_BANK_DSP = 0x00, 
+    ATK_MC2640_REG_BANK_SENSOR,     
 } atk_mc2640_reg_bank_t;
 
-/* ATK-MC2640ģ�����ݽṹ�� */
+/* 运行时状态: 当前输出分辨率；非 DCMI 模式另有行缓冲与 DMA */
 static struct
 {
     struct {
@@ -59,22 +53,15 @@ static struct
 #endif
 } g_atk_mc2640_sta = {0};
 
-/**
- * @brief       ATK-MC2640ģ��д�Ĵ���
- * @param       reg: �Ĵ�����ַ
- *              dat: ��д���ֵ
- * @retval      ��
- */
+/* ---------- SCCB 寄存器访问 ---------- */
+
+/* 写单字节寄存器 (SCCB 三相写) */
 static void atk_mc2640_write_reg(uint8_t reg, uint8_t dat)
 {
     atk_mc2640_sccb_3_phase_write(ATK_MC2640_SCCB_ADDR, reg, dat);
 }
 
-/**
- * @brief       ATK-MC2640ģ����Ĵ���
- * @param       reg: �Ĵ����ĵ�ַ
- * @retval      ��ȡ���ļĴ���ֵ
- */
+/* 读单字节寄存器 (SCCB 两相写 + 两相读) */
 static uint8_t atk_mc2640_read_reg(uint8_t reg)
 {
     uint8_t dat = 0;
@@ -85,13 +72,7 @@ static uint8_t atk_mc2640_read_reg(uint8_t reg)
     return dat;
 }
 
-/**
- * @brief       ����ATK-MC2640ģ�����õļĴ�����
- * @param       set: ATK_MC2640_REG_BANK_DSP   : DSP�Ĵ�����
- *                   ATK_MC2640_REG_BANK_SENSOR: Sensor�Ĵ�����
- * @retval      ATK_MC2640_EOK   : ����ATK-MC2640ģ�����õļĴ�����ɹ�
- *              ATK_MC2640_EINVAL: �����������
- */
+/* 切换 DSP / Sensor 寄存器 Bank (REG_BANK_SEL) */
 static uint8_t atk_mc2640_reg_bank_select(atk_mc2640_reg_bank_t bank)
 {
     switch (bank)
@@ -115,16 +96,17 @@ static uint8_t atk_mc2640_reg_bank_select(atk_mc2640_reg_bank_t bank)
     return ATK_MC2640_EOK;
 }
 
-/**
- * @brief       ATK-MC2640ģ��Ӳ����ʼ��
- * @param       ��
- * @retval      ��
+/* ---------- 硬件 GPIO ---------- */
+
+/*
+ * 初始化 RST/PWDN；非 DCMI 模式下还需配置 D0-D7/VSYNC/HREF/PCLK 为输入。
+ * DCMI 模式下 DVP 引脚由 atk_mc2640_dcmi.c 配置。
  */
 static void atk_mc2640_hw_init(void)
 {
     GPIO_InitTypeDef gpio_init_struct = {0};
     
-    /* ʹ��GPIOʱ�� */
+    
 #if (ATK_MC2640_USING_DCMI == 0)
     ATK_MC2640_VSYNC_GPIO_CLK_ENABLE();
     ATK_MC2640_HREF_GPIO_CLK_ENABLE();
@@ -142,77 +124,77 @@ static void atk_mc2640_hw_init(void)
     ATK_MC2640_PWDN_GPIO_CLK_ENABLE();
     
 #if (ATK_MC2640_USING_DCMI == 0)
-    /* ��ʼ��VSYNC���� */
+    
     gpio_init_struct.Pin    = ATK_MC2640_VSYNC_GPIO_PIN;
     gpio_init_struct.Mode   = GPIO_MODE_INPUT;
     gpio_init_struct.Pull   = GPIO_PULLUP;
     gpio_init_struct.Speed  = GPIO_SPEED_FREQ_HIGH;
     HAL_GPIO_Init(ATK_MC2640_VSYNC_GPIO_PORT, &gpio_init_struct);
     
-    /* ��ʼ��HREF���� */
+    
     gpio_init_struct.Pin    = ATK_MC2640_HREF_GPIO_PIN;
     gpio_init_struct.Mode   = GPIO_MODE_INPUT;
     gpio_init_struct.Pull   = GPIO_PULLUP;
     gpio_init_struct.Speed  = GPIO_SPEED_FREQ_HIGH;
     HAL_GPIO_Init(ATK_MC2640_HREF_GPIO_PORT, &gpio_init_struct);
     
-    /* ��ʼ��D0���� */
+    
     gpio_init_struct.Pin    = ATK_MC2640_D0_GPIO_PIN;
     gpio_init_struct.Mode   = GPIO_MODE_INPUT;
     gpio_init_struct.Pull   = GPIO_PULLUP;
     gpio_init_struct.Speed  = GPIO_SPEED_FREQ_HIGH;
     HAL_GPIO_Init(ATK_MC2640_D0_GPIO_PORT, &gpio_init_struct);
     
-    /* ��ʼ��D1���� */
+    
     gpio_init_struct.Pin    = ATK_MC2640_D1_GPIO_PIN;
     gpio_init_struct.Mode   = GPIO_MODE_INPUT;
     gpio_init_struct.Pull   = GPIO_PULLUP;
     gpio_init_struct.Speed  = GPIO_SPEED_FREQ_HIGH;
     HAL_GPIO_Init(ATK_MC2640_D1_GPIO_PORT, &gpio_init_struct);
     
-    /* ��ʼ��D2���� */
+    
     gpio_init_struct.Pin    = ATK_MC2640_D2_GPIO_PIN;
     gpio_init_struct.Mode   = GPIO_MODE_INPUT;
     gpio_init_struct.Pull   = GPIO_PULLUP;
     gpio_init_struct.Speed  = GPIO_SPEED_FREQ_HIGH;
     HAL_GPIO_Init(ATK_MC2640_D2_GPIO_PORT, &gpio_init_struct);
     
-    /* ��ʼ��D3���� */
+    
     gpio_init_struct.Pin    = ATK_MC2640_D3_GPIO_PIN;
     gpio_init_struct.Mode   = GPIO_MODE_INPUT;
     gpio_init_struct.Pull   = GPIO_PULLUP;
     gpio_init_struct.Speed  = GPIO_SPEED_FREQ_HIGH;
     HAL_GPIO_Init(ATK_MC2640_D3_GPIO_PORT, &gpio_init_struct);
     
-    /* ��ʼ��D4���� */
+    
     gpio_init_struct.Pin    = ATK_MC2640_D4_GPIO_PIN;
     gpio_init_struct.Mode   = GPIO_MODE_INPUT;
     gpio_init_struct.Pull   = GPIO_PULLUP;
     gpio_init_struct.Speed  = GPIO_SPEED_FREQ_HIGH;
     HAL_GPIO_Init(ATK_MC2640_D4_GPIO_PORT, &gpio_init_struct);
     
-    /* ��ʼ��D5���� */
+    
     gpio_init_struct.Pin    = ATK_MC2640_D5_GPIO_PIN;
     gpio_init_struct.Mode   = GPIO_MODE_INPUT;
     gpio_init_struct.Pull   = GPIO_PULLUP;
     gpio_init_struct.Speed  = GPIO_SPEED_FREQ_HIGH;
     HAL_GPIO_Init(ATK_MC2640_D5_GPIO_PORT, &gpio_init_struct);
     
-    /* ��ʼ��D6���� */
+    
     gpio_init_struct.Pin    = ATK_MC2640_D6_GPIO_PIN;
     gpio_init_struct.Mode   = GPIO_MODE_INPUT;
     gpio_init_struct.Pull   = GPIO_PULLUP;
     gpio_init_struct.Speed  = GPIO_SPEED_FREQ_HIGH;
     HAL_GPIO_Init(ATK_MC2640_D6_GPIO_PORT, &gpio_init_struct);
     
-    /* ��ʼ��D7���� */
+    
     gpio_init_struct.Pin    = ATK_MC2640_D7_GPIO_PIN;
     gpio_init_struct.Mode   = GPIO_MODE_INPUT;
     gpio_init_struct.Pull   = GPIO_PULLUP;
     gpio_init_struct.Speed  = GPIO_SPEED_FREQ_HIGH;
     HAL_GPIO_Init(ATK_MC2640_D7_GPIO_PORT, &gpio_init_struct);
     
-    /* ��ʼ��PCLK���� */
+    
     gpio_init_struct.Pin    = ATK_MC2640_PCLK_GPIO_PIN;
     gpio_init_struct.Mode   = GPIO_MODE_INPUT;
     gpio_init_struct.Pull   = GPIO_PULLUP;
@@ -220,22 +202,22 @@ static void atk_mc2640_hw_init(void)
     HAL_GPIO_Init(ATK_MC2640_PCLK_GPIO_PORT, &gpio_init_struct);
 #endif
     
-    /* ��ʼ��RST���� */
+    
     gpio_init_struct.Pin    = ATK_MC2640_RST_GPIO_PIN;
     gpio_init_struct.Mode   = GPIO_MODE_OUTPUT_PP;
     gpio_init_struct.Pull   = GPIO_PULLUP;
     gpio_init_struct.Speed  = GPIO_SPEED_FREQ_HIGH;
     HAL_GPIO_Init(ATK_MC2640_RST_GPIO_PORT, &gpio_init_struct);
     
-    /* ��ʼ��PWDN���� */
-    gpio_init_struct.Pin    = ATK_MC2640_PWDN_GPIO_PIN;//PD3
+    
+    gpio_init_struct.Pin    = ATK_MC2640_PWDN_GPIO_PIN;
     gpio_init_struct.Mode   = GPIO_MODE_OUTPUT_PP;
     gpio_init_struct.Pull   = GPIO_PULLUP;
     gpio_init_struct.Speed  = GPIO_SPEED_FREQ_HIGH;
     HAL_GPIO_Init(ATK_MC2640_PWDN_GPIO_PORT, &gpio_init_struct);
     
 #if (ATK_MC2640_LED_CTL_BY_OV2640 == 0)
-    /* ��ʼ��FLASH���� */
+    
     gpio_init_struct.Pin    = ATK_MC2640_FLASH_GPIO_PIN;
     gpio_init_struct.Mode   = GPIO_MODE_OUTPUT_PP;
     gpio_init_struct.Pull   = GPIO_PULLUP;
@@ -250,22 +232,14 @@ static void atk_mc2640_hw_init(void)
 #endif
 }
 
-/**
- * @brief       ATK-MC2640ģ���˳�����ģʽ
- * @param       ��
- * @retval      ��
- */
+/* PWDN 拉低，退出掉电 */
 static void atk_mc2640_exit_power_down(void)
 {
     ATK_MC2640_PWDN(0);
     stm32f4_delay_ms(10);
 }
 
-/**
- * @brief       ATK-MC2640ģ��Ӳ����λ
- * @param       ��
- * @retval      ��
- */
+/* RST 低脉冲硬件复位 */
 static void atk_mc2640_hw_reset(void)
 {
     ATK_MC2640_RST(0);
@@ -274,11 +248,7 @@ static void atk_mc2640_hw_reset(void)
     stm32f4_delay_ms(10);
 }
 
-/**
- * @brief       ATK-MC2640ģ��������λ
- * @param       ��
- * @retval      ��
- */
+/* 写 COM7 bit7 软件复位 Sensor Bank */
 static void atk_mc2640_sw_reset(void)
 {
     atk_mc2640_reg_bank_select(ATK_MC2640_REG_BANK_SENSOR);
@@ -286,11 +256,7 @@ static void atk_mc2640_sw_reset(void)
     stm32f4_delay_ms(50);
 }
 
-/**
- * @brief       ��ȡATK-MC2640ģ��������ID
- * @param       ��
- * @retval      ������ID
- */
+/* 读取 MIDH/MIDL 组成 16 位制造商 ID */
 static uint16_t atk_mc2640_get_mid(void)
 {
     uint16_t mid;
@@ -302,11 +268,7 @@ static uint16_t atk_mc2640_get_mid(void)
     return mid;
 }
 
-/**
- * @brief       ��ȡATK-MC2640ģ���ƷID
- * @param       ��
- * @retval      ��ƷID
- */
+/* 读取 PIDH/PIDL 组成 16 位产品 ID (期望 0x2642) */
 static uint16_t atk_mc2640_get_pid(void)
 {
     uint16_t pid;
@@ -318,10 +280,9 @@ static uint16_t atk_mc2640_get_pid(void)
     return pid;
 }
 
-/**
- * @brief       ��ʼ��ATK-MC2640�Ĵ�������
- * @param       ��
- * @retval      ��
+/*
+ * 加载 UXGA 初始化寄存器表，并从 ZMOW/ZMOH/ZMHH 解析默认输出尺寸。
+ * 寄存器数组定义在 atk_mc2640_cfg.c。
  */
 static void atk_mc2640_init_reg(void)
 {
@@ -344,12 +305,11 @@ static void atk_mc2640_init_reg(void)
     g_atk_mc2640_sta.output.height = ((uint16_t)zmoh | ((zmhh & 0x04) << 6)) << 2;
 }
 
+/* ---------- GPIO 位 bang 采帧 (ATK_MC2640_USING_DCMI==0) ---------- */
+
 #if (ATK_MC2640_USING_DCMI == 0)
-/**
- * @brief       ��ȡATK-MD2640�˿�D0~D7��һ�ֽ�����
- * @param       ��
- * @retval      ATK-MD2640�˿�D0~D7��һ�ֽ�����
- */
+
+/* 从 D0-D7 GPIO 拼一字节像素数据 */
 static inline uint8_t atk_mc2640_get_byte_data(void)
 {
 #if (ATK_MC2640_DATA_PIN_IN_SAME_GPIO_PORT == 0)
@@ -372,15 +332,8 @@ static inline uint8_t atk_mc2640_get_byte_data(void)
 #endif
 
 #if (ATK_MC2640_USING_DCMI == 0)
-/**
- * @brief       ��ʼ��ATK-MC2640ģ��DMA
- * @param       meminc          : DMA_MINC_DISABLE: ֡���ݽ��յ�Ŀ�ĵ�ַ�Զ�����
- *                                DMA_MINC_ENABLE : ֡���ݽ��յ�Ŀ�ĵ�ַ���Զ�����
- *              memdataalignment: DMA_MDATAALIGN_BYTE    : ֡���ݽ��ջ����λ��Ϊ8����
- *                                DMA_MDATAALIGN_HALFWORD: ֡���ݽ��ջ����λ��Ϊ16����
- *                                DMA_MDATAALIGN_WORD    : ֡���ݽ��ջ����λ��Ϊ32����
- * @retval      ��
- */
+
+/* 配置 DMA 将行缓冲搬运到目标地址 (内存到内存) */
 static void atk_mc2640_dma_init(uint32_t meminc, uint32_t memdataalignment)
 {
     ATK_MC2640_DMA_CLK_ENABLE();
@@ -399,38 +352,37 @@ static void atk_mc2640_dma_init(uint32_t meminc, uint32_t memdataalignment)
 }
 #endif
 
-/**
- * @brief       ��ʼ��ATK-MC2640ģ��
- * @param       ��
- * @retval      ATK_MC2640_EOK   : ATK-MC2640ģ���ʼ���ɹ�
- *              ATK_MC2640_ERROR : ͨѶ������ATK-MC2640ģ���ʼ��ʧ��
- *              ATK_MC2640_ENOMEM: �ڴ治�㣬ATK-MC2640ģ���ʼ��ʧ��
+/* ---------- 公开 API: 初始化 ---------- */
+
+/*
+ * 完整初始化: GPIO -> 退出掉电 -> 硬复位 -> SCCB -> 软复位 -> ID 校验 -> 寄存器表 -> DCMI。
+ * @return ATK_MC2640_EOK / ATK_MC2640_ERROR (ID 不匹配) / ATK_MC2640_ENOMEM
  */
 uint8_t atk_mc2640_init(void)
 {
     uint16_t mid;
     uint16_t pid;
     
-    atk_mc2640_hw_init();           /* ATK-MC2640ģ��Ӳ����ʼ�� */
-    atk_mc2640_exit_power_down();   /* ATK-MC2640ģ���˳�����ģʽ */
-    atk_mc2640_hw_reset();          /* ATK-MC2640ģ��Ӳ����λ */
-    atk_mc2640_sccb_init();         /* ATK-MC2640 SCCB�ӿڳ�ʼ�� */
-    atk_mc2640_sw_reset();          /* ATK-MC2640ģ��������λ */
-    
-    mid = atk_mc2640_get_mid();     /* ��ȡ������ID */
+    atk_mc2640_hw_init();
+    atk_mc2640_exit_power_down();
+    atk_mc2640_hw_reset();
+    atk_mc2640_sccb_init();
+    atk_mc2640_sw_reset();
+
+    mid = atk_mc2640_get_mid();
     if (mid != ATK_MC2640_MID)
     {
         return ATK_MC2640_ERROR;
     }
-    
-    pid = atk_mc2640_get_pid();     /* ��ȡ��ƷID */
+
+    pid = atk_mc2640_get_pid();
     if (pid != ATK_MC2640_PID)
     {
         return ATK_MC2640_ERROR;
     }
-    
-    atk_mc2640_init_reg();          /* ��ʼ��ATK-MC2640�Ĵ������� */
-    
+
+    atk_mc2640_init_reg();
+
 #if (ATK_MC2640_USING_DCMI == 0)
     g_atk_mc2640_sta.read.line_buf = mymalloc(SRAMIN, g_atk_mc2640_sta.output.width * sizeof(uint16_t));
     
@@ -441,38 +393,28 @@ uint8_t atk_mc2640_init(void)
 #endif
     
 #if (ATK_MC2640_USING_DCMI != 0)
-    atk_mc2640_dcmi_init();         /* ��ʼ��ATK-MC2640ģ��DCMI�ӿ� */
+    atk_mc2640_dcmi_init();         
 #endif
     
     return ATK_MC2640_EOK;
 }
 
+/* ---------- 补光灯 ---------- */
+
 #if (ATK_MC2640_LED_CTL_BY_OV2640 == 0)
-/**
- * @brief       ����ATK-MC2640ģ�������
- * @param       ��
- * @retval      ��
- */
+
 void atk_mc2640_led_on(void)
 {
     ATK_MC2640_FLASH(1);
 }
 
-/**
- * @brief       �ر�ATK-MC2640ģ�������
- * @param       ��
- * @retval      ��
- */
 void atk_mc2640_led_off(void)
 {
     ATK_MC2640_FLASH(0);
 }
 #else
-/**
- * @brief       ��˸ATK-MC2640ģ�����LED
- * @param       ��
- * @retval      ��
- */
+
+/* 通过 OV2640 COM22 寄存器使能模块 LED */
 void atk_mc2640_led_enable(void)
 {
     atk_mc2640_reg_bank_select(ATK_MC2640_REG_BANK_SENSOR);
@@ -481,16 +423,9 @@ void atk_mc2640_led_enable(void)
 }
 #endif
 
-/**
- * @brief       ����ATK-MC2640ģ��ƹ�ģʽ
- * @param       mode: ATK_MC2640_LIGHT_MOED_AUTO  : Auto
- *                    ATK_MC2640_LIGHT_MOED_SUNNY : Sunny
- *                    ATK_MC2640_LIGHT_MOED_CLOUDY: Cloudy
- *                    ATK_MC2640_LIGHT_MOED_OFFICE: Office
- *                    ATK_MC2640_LIGHT_MOED_HOME  : Home
- * @retval      ATK_MC2640_EOK   : ����ATK-MC2640ģ��ƹ�ģʽ�ɹ�
- *              ATK_MC2640_EINVAL: �����������
- */
+/* ---------- 图像效果 (均写 DSP Bank 寄存器) ---------- */
+
+/* 白平衡/光线模式: Auto / Sunny / Cloudy / Office / Home */
 uint8_t atk_mc2640_set_light_mode(atk_mc2640_light_mode_t mode)
 {
     switch (mode)
@@ -546,16 +481,7 @@ uint8_t atk_mc2640_set_light_mode(atk_mc2640_light_mode_t mode)
     return ATK_MC2640_EOK;
 }
 
-/**
- * @brief       ����ATK-MC2640ģ��ɫ�ʱ��Ͷ�
- * @param       saturation: ATK_MC2640_COLOR_SATURATION_0: +2
- *                          ATK_MC2640_COLOR_SATURATION_1: +1
- *                          ATK_MC2640_COLOR_SATURATION_2: 0
- *                          ATK_MC2640_COLOR_SATURATION_3: -1
- *                          ATK_MC2640_COLOR_SATURATION_4: -2
- * @retval      ATK_MC2640_EOK   : ����ATK-MC2640ģ��ɫ�ʱ��Ͷȳɹ�
- *              ATK_MC2640_EINVAL: �����������
- */
+/* 色彩饱和度 (+2 ~ -2) */
 uint8_t atk_mc2640_set_color_saturation(atk_mc2640_color_saturation_t saturation)
 {
     switch (saturation)
@@ -619,16 +545,7 @@ uint8_t atk_mc2640_set_color_saturation(atk_mc2640_color_saturation_t saturation
     return ATK_MC2640_EOK;
 }
 
-/**
- * @brief       ����ATK-MC2640ģ������
- * @param       brightness: ATK_MC2640_BRIGHTNESS_0: +2
- *                          ATK_MC2640_BRIGHTNESS_1: +1
- *                          ATK_MC2640_BRIGHTNESS_2: 0
- *                          ATK_MC2640_BRIGHTNESS_3: -1
- *                          ATK_MC2640_BRIGHTNESS_4: -2
- * @retval      ATK_MC2640_EOK   : ����ATK-MC2640ģ�����ȳɹ�
- *              ATK_MC2640_EINVAL: �����������
- */
+/* 亮度 (+2 ~ -2) */
 uint8_t atk_mc2640_set_brightness(atk_mc2640_brightness_t brightness)
 {
     switch (brightness)
@@ -692,16 +609,7 @@ uint8_t atk_mc2640_set_brightness(atk_mc2640_brightness_t brightness)
     return ATK_MC2640_EOK;
 }
 
-/**
- * @brief       ����ATK-MC2640ģ��Աȶ�
- * @param       contrast: ATK_MC2640_CONTRAST_0: +2
- *                        ATK_MC2640_CONTRAST_1: +1
- *                        ATK_MC2640_CONTRAST_2: 0
- *                        ATK_MC2640_CONTRAST_3: -1
- *                        ATK_MC2640_CONTRAST_4: -2
- * @retval      ATK_MC2640_EOK   : ����ATK-MC2640ģ��Աȶȳɹ�
- *              ATK_MC2640_EINVAL: �����������
- */
+/* 对比度 (+2 ~ -2) */
 uint8_t atk_mc2640_set_contrast(atk_mc2640_contrast_t contrast)
 {
     switch (contrast)
@@ -775,20 +683,7 @@ uint8_t atk_mc2640_set_contrast(atk_mc2640_contrast_t contrast)
     return ATK_MC2640_EOK;
 }
 
-
-/**
- * @brief       ����ATK-MC2640ģ������Ч��
- * @param       contrast: ATK_MC2640_SPECIAL_EFFECT_ANTIQUE    : Antique
- *                        ATK_MC2640_SPECIAL_EFFECT_BLUISH     : Bluish
- *                        ATK_MC2640_SPECIAL_EFFECT_GREENISH   : Greenish
- *                        ATK_MC2640_SPECIAL_EFFECT_REDISH     : Redish
- *                        ATK_MC2640_SPECIAL_EFFECT_BW         : B&W
- *                        ATK_MC2640_SPECIAL_EFFECT_NEGATIVE   : Negative
- *                        ATK_MC2640_SPECIAL_EFFECT_BW_NEGATIVE: B&W Negative
- *                        ATK_MC2640_SPECIAL_EFFECT_NORMAL     : Normal
- * @retval      ATK_MC2640_EOK   : ����ATK-MC2640ģ������Ч���ɹ�
- *              ATK_MC2640_EINVAL: �����������
- */
+/* 特效: 复古/偏色/黑白/负片/正常等 */
 uint8_t atk_mc2640_set_special_effect(atk_mc2640_special_effect_t effect)
 {
     switch (effect)
@@ -882,13 +777,9 @@ uint8_t atk_mc2640_set_special_effect(atk_mc2640_special_effect_t effect)
     return ATK_MC2640_EOK;
 }
 
-/**
- * @brief       ����ATK-MC2640ģ�����ͼ���ʽ
- * @param       mode: ATK_MC2640_OUTPUT_FORMAT_RGB565: RGB565
- *                    ATK_MC2640_OUTPUT_FORMAT_JPEG : JPEG
- * @retval      ATK_MC2640_EOK   : ����ATK-MC2640ģ�����ͼ���ʽ�ɹ�
- *              ATK_MC2640_EINVAL: �����������
- */
+/* ---------- 输出格式与尺寸 ---------- */
+
+/* 切换 RGB565 或 JPEG (JPEG 需先 YUV422 再 JPEG 寄存器组) */
 uint8_t atk_mc2640_set_output_format(atk_mc2640_output_format_t format)
 {
     uint32_t cfg_index;
@@ -924,14 +815,7 @@ uint8_t atk_mc2640_set_output_format(atk_mc2640_output_format_t format)
     return ATK_MC2640_EOK;
 }
 
-/**
- * @brief       ����ATK-MC2640ģ�����ͼ��ֱ���
- * @param       width : ���ͼ����ȣ�������4�ı���
- *              height: ���ͼ��߶ȣ�������4�ı���
- * @retval      ATK_MC2640_EOK   : ����ATK-MC2640ģ�����ͼ���С�ɹ�
- *              ATK_MC2640_EINVAL: �����������
- *              ATK_MC2640_ENOMEM: �ڴ治��
- */
+/* 设置输出分辨率，宽高须 4 像素对齐；写 DSP ZMOW/ZMOH/ZMHH */
 uint8_t atk_mc2640_set_output_size(uint16_t width, uint16_t height)
 {
     uint16_t output_width;
@@ -970,14 +854,7 @@ uint8_t atk_mc2640_set_output_size(uint16_t width, uint16_t height)
     return ATK_MC2640_EOK;
 }
 
-/**
- * @brief       ����ATK-MC2640ģ�鴫��������
- * @param       start_x: ������������ʼX����
- *              start_y: ������������ʼY����
- *              width  : ���������ڿ���
- *              height : ���������ڸ߶�
- * @retval      ��
- */
+/* 设置 Sensor 侧原始感光窗口 (裁剪传感器阵列) */
 void atk_mc2640_set_sensor_window(uint16_t start_x, uint16_t start_y, uint16_t width, uint16_t height)
 {
     uint16_t end_x;
@@ -1005,15 +882,7 @@ void atk_mc2640_set_sensor_window(uint16_t start_x, uint16_t start_y, uint16_t w
     atk_mc2640_write_reg(ATK_MC2640_REG_SENSOR_HREFEND, end_x >> 3);
 }
 
-/**
- * @brief       ����ATK-MC2640ģ�����ͼ�񴰿�
- * @param       off_x : ���ͼ�񴰿�ƫ��X����
- *              off_y : ���ͼ�񴰿�ƫ��Y����
- *              width : ���ͼ�񴰿ڿ��ȣ�������4�ı���
- *              height: ���ͼ�񴰿ڸ߶ȣ�������4�ı���
- * @retval      ATK_MC2640_EOK   : ����ATK-MC2640ģ�����ͼ���С�ɹ�
- *              ATK_MC2640_EINVAL: �����������
- */
+/* 设置 DSP 侧输出窗口偏移与大小 (HSIZE/VSIZE/XOFF/YOFF) */
 uint8_t atk_mc2640_set_image_window(uint16_t off_x, uint16_t off_y, uint16_t width, uint16_t height)
 {
     uint16_t hsize;
@@ -1043,15 +912,7 @@ uint8_t atk_mc2640_set_image_window(uint16_t off_x, uint16_t off_y, uint16_t wid
     return ATK_MC2640_EOK;
 }
 
-/**
- * @brief       ����ATK-MC2640ģ�����ͼ���С
- * @param       off_x : ���ͼ�񴰿�ƫ��X����
- *              off_y : ���ͼ�񴰿�ƫ��Y����
- *              width : ���ͼ�񴰿ڿ��ȣ�������4�ı���
- *              height: ���ͼ�񴰿ڸ߶ȣ�������4�ı���
- * @retval      ATK_MC2640_EOK   : ����ATK-MC2640ģ�����ͼ���С�ɹ�
- *              ATK_MC2640_EINVAL: �����������
- */
+/* 设置 DSP 输出图像尺寸 (HSIZE8/VSIZE8/SIZEL) */
 void atk_mc2640_set_image_size(uint16_t width, uint16_t height)
 {
     uint8_t sizel;
@@ -1066,13 +927,7 @@ void atk_mc2640_set_image_size(uint16_t width, uint16_t height)
     atk_mc2640_write_reg(ATK_MC2640_REG_DSP_RESET, 0x00);
 }
 
-/**
- * @brief       ����ATK-MC2640ģ���������
- * @param       clk_dev : Clock divider��0~63��
- *              pclk_dev: DVP PCLK��1~127��
- * @retval      ATK_MC2640_EOK   : ����ATK-MC2640ģ��������ʳɹ�
- *              ATK_MC2640_EINVAL: �����������
- */
+/* 调整 PCLK 分频: clk_dev (Sensor) + pclk_dev (DSP DVP) */
 uint8_t atk_mc2640_set_output_speed(uint8_t clk_dev, uint8_t pclk_dev)
 {
     if (clk_dev > 63)
@@ -1093,11 +948,9 @@ uint8_t atk_mc2640_set_output_speed(uint8_t clk_dev, uint8_t pclk_dev)
     return ATK_MC2640_EOK;
 }
 
-/**
- * @brief       ����ATK-MC2640ģ���������
- * @param       ��
- * @retval      ��
- */
+/* ---------- 调试 ---------- */
+
+/* 开启传感器内置彩条测试图 (COM7 bit1) */
 void atk_mc2640_colorbar_enable(void)
 {
     uint8_t com7;
@@ -1108,11 +961,7 @@ void atk_mc2640_colorbar_enable(void)
     atk_mc2640_write_reg(ATK_MC2640_REG_SENSOR_COM7, com7);
 }
 
-/**
- * @brief       �ر�ATK-MC2640ģ���������
- * @param       ��
- * @retval      ��
- */
+/* 关闭彩条 */
 void atk_mc2640_colorbar_disable(void)
 {
     uint8_t com7;
@@ -1123,25 +972,25 @@ void atk_mc2640_colorbar_disable(void)
     atk_mc2640_write_reg(ATK_MC2640_REG_SENSOR_COM7, com7);
 }
 
-/**
- * @brief       ��ȡATK-MC2640ģ�������һ֡ͼ������
- * @param       dts_addr : ֡���ݵĽ��ջ�����׵�ַ
- *              type: ATK_MC2640_GET_TYPE_DTS_8B_NOINC : ͼ���������ֽڷ�ʽд��Ŀ�ĵ�ַ��Ŀ�ĵ�ַ�̶�����
- *                    ATK_MC2640_GET_TYPE_DTS_8B_INC   : ͼ���������ֽڷ�ʽд��Ŀ�ĵ�ַ��Ŀ�ĵ�ַ�Զ�����
- *                    ATK_MC2640_GET_TYPE_DTS_16B_NOINC: ͼ�������԰��ַ�ʽд��Ŀ�ĵ�ַ��Ŀ�ĵ�ַ�̶�����
- *                    ATK_MC2640_GET_TYPE_DTS_16B_INC  : ͼ�������԰��ַ�ʽд��Ŀ�ĵ�ַ��Ŀ�ĵ�ַ�Զ�����
- *                    ATK_MC2640_GET_TYPE_DTS_32B_NOINC: ͼ���������ַ�ʽд��Ŀ�ĵ�ַ��Ŀ�ĵ�ַ�̶�����
- *                    ATK_MC2640_GET_TYPE_DTS_32B_INC  : ͼ���������ַ�ʽд��Ŀ�ĵ�ַ��Ŀ�ĵ�ַ�Զ�����
- *              before_transfer: ֡���ݴ���ǰ����Ҫ��ɵ����񣬿�ΪNULL
- * @retval      ATK_MC2640_EOK   : ��ȡATK-MC2640ģ�������һ֡ͼ�����ݳɹ�
- *              ATK_MC2640_EINVAL: �����������
- *              ATK_MC2640_EEMPTY: ͼ������Ϊ��
- */
+/* ---------- 帧采集 ---------- */
+
+/* 采集一帧，不限制缓冲大小 (buf_bytes=0) */
 uint8_t atk_mc2640_get_frame(uint32_t dts_addr, atk_mc2640_get_type_t type, void (*before_transfer)(void))
 {
     return atk_mc2640_get_frame_sized(dts_addr, type, before_transfer, 0);
 }
 
+/*
+ * 采集一帧到 dts_addr，可限制最大字节数 buf_bytes。
+ *
+ * @param type  DMA 目标宽度与地址递增方式 (8/16/32 bit, INC/NOINC)
+ *              eth_camera 使用 DTS_32B_INC: 32 位字写入且地址递增
+ * @param before_transfer  开始 DMA 前回调 (可为 NULL)
+ * @param buf_bytes        >0 时按 uint32_t 字数截断传输长度 (JPEG 防溢出)
+ *
+ * DCMI 模式: atk_mc2640_dcmi_start() 阻塞至帧完成或超时 (dcmi_sem)。
+ * GPIO 模式: 逐 PCLK 读 D0-D7，行 DMA 搬运 (本工程未启用)。
+ */
 uint8_t atk_mc2640_get_frame_sized(uint32_t dts_addr, atk_mc2640_get_type_t type, void (*before_transfer)(void), uint32_t buf_bytes)
 {
     uint32_t meminc;
@@ -1236,6 +1085,7 @@ uint8_t atk_mc2640_get_frame_sized(uint32_t dts_addr, atk_mc2640_get_type_t type
         before_transfer();
     }
 
+    /* 按 buf_bytes 限制 DMA 字数，防止 JPEG 超出用户缓冲 */
     if (buf_bytes >= sizeof(uint32_t))
     {
         uint32_t max_words = buf_bytes / sizeof(uint32_t);
