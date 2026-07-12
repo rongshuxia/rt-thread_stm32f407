@@ -10,6 +10,11 @@
 
 #include "drv_common.h"
 #include "board.h"
+#include "ccmram.h"
+
+#ifdef BSP_USING_IS62WV51216
+#include "is62wv51216.h"
+#endif
 
 #ifdef RT_USING_SERIAL
 #include "drv_usart.h"
@@ -128,6 +133,8 @@ RT_WEAK void rt_hw_board_init()
     /* HAL_Init() function is called at the beginning of the program */
     HAL_Init();
 
+    ccmram_init();
+
     /* enable interrupt */
     __set_PRIMASK(0);
     /* System clock initialization */
@@ -136,6 +143,10 @@ RT_WEAK void rt_hw_board_init()
     __set_PRIMASK(1);
 
     rt_hw_systick_init();
+
+#ifdef BSP_USING_IS62WV51216
+    is62wv51216_init();
+#endif
 
     /* Heap initialization */
 #if defined(RT_USING_HEAP)

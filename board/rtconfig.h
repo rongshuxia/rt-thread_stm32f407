@@ -297,5 +297,6 @@
 
 /* Board extended module Drivers */
 
+#define BSP_USING_IS62WV51216
 
 #endif

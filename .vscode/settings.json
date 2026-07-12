@@ -4,5 +4,6 @@
     "clangd.arguments": [
         "--background-index",
         "--header-insertion=never"
-    ]
+    ],
+    "cmake.ignoreCMakeListsMissing": true
 }

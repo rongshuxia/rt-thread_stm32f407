@@ -27,6 +27,8 @@ HOST = "192.168.188.18"   # 板子静态 IP（rtconfig.h）
 PORT = 8001               # TCP 端口（eth_camera.h ETH_PORT）
 SCALE = 2                 # 显示放大倍数，2 表示 320x240 -> 640x480
 TITLE = "Network Camera (close window or Ctrl+C to quit)"
+MAX_JPEG_BYTES = 36 * 1024   # 板端 JPEG_BUF_SIZE=32KB，留少量余量
+STALE_BUF_LIMIT = 48 * 1024  # 半帧超过此大小则丢弃重同步
 
 # Pillow 缩放算法（兼容不同版本）
 _RESAMPLE = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.BICUBIC)
@@ -51,9 +53,17 @@ def split_jpeg(buf):
 
         eoi = buf.find(b"\xff\xd9", soi + 2)  # JPEG 帧尾
         if eoi < 0:
-            return frames, buf[soi:]          # 半帧，继续等待
+            if len(buf) - soi > STALE_BUF_LIMIT:
+                start = soi + 2
+                continue
+            return frames, buf[soi:]
 
-        frames.append(buf[soi : eoi + 2])
+        frame = buf[soi : eoi + 2]
+        if len(frame) > MAX_JPEG_BYTES:
+            start = eoi + 2
+            continue
+
+        frames.append(frame)
         start = eoi + 2
 
     return frames, b""
@@ -139,6 +149,10 @@ def main():
             total_bytes += len(data)
             buf += data
             frames, buf = split_jpeg(buf)
+
+            if not frames and len(buf) > STALE_BUF_LIMIT:
+                soi = buf.rfind(b"\xff\xd8")
+                buf = buf[soi:] if soi >= 0 else b""
 
             if not frames and viewer.frame_count == 0:
                 viewer.set_status(

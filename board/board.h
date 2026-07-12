@@ -27,6 +27,14 @@ extern "C" {
 #define STM32_FLASH_SIZE             (1024 * 1024)
 #define STM32_FLASH_END_ADDRESS      ((uint32_t)(STM32_FLASH_START_ADRESS + STM32_FLASH_SIZE))
 
+#ifdef BSP_USING_IS62WV51216_HEAP
+#include "is62wv51216.h"
+#ifndef IS62WV51216_HEAP_SIZE
+#define IS62WV51216_HEAP_SIZE        IS62WV51216_SIZE
+#endif
+#define HEAP_BEGIN                   ((void *)IS62WV51216_BASE_ADDR)
+#define HEAP_END                     ((void *)(IS62WV51216_BASE_ADDR + IS62WV51216_HEAP_SIZE))
+#else
 #if defined(__CC_ARM) || defined(__CLANG_ARM)
 extern int Image$$RW_IRAM1$$ZI$$Limit;
 #define HEAP_BEGIN      ((void *)&Image$$RW_IRAM1$$ZI$$Limit)
@@ -39,6 +47,7 @@ extern int __bss_end;
 #endif
 
 #define HEAP_END        STM32_SRAM_END
+#endif /* BSP_USING_IS62WV51216_HEAP */
 
 void SystemClock_Config(void);
 

@@ -10,6 +10,7 @@
 /* 1: main 里跑 TCP 吞吐测试(RTT 看结果); 0: 正常启动 Camera */
 #define NETPERF_TEST_IN_MAIN    0
 
+
 int main(void)
 {
 	static ip_addr_t ipaddr;
@@ -23,7 +24,6 @@ int main(void)
 	ip_addr[2] = (uint8_t)(ipaddr.addr >> 16);
 	ip_addr[1] = (uint8_t)(ipaddr.addr >> 8);
 	ip_addr[0] = (uint8_t)(ipaddr.addr);
-
 
     /* Bring up LVGL in its own thread - won't block eth_camera. */
     lv_port_init();

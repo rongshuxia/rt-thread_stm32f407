@@ -20,16 +20,17 @@
 /*=========================
    MEMORY SETTINGS
  *=========================*/
-/* Use RT-Thread heap instead of LVGL builtin allocator */
-#define LV_MEM_CUSTOM 1
+/* LVGL built-in pool on external IS62WV51216 SRAM */
+#include "is62wv51216.h"
+#define LV_MEM_CUSTOM 0
 #if LV_MEM_CUSTOM
     #define LV_MEM_CUSTOM_INCLUDE  <rtthread.h>
     #define LV_MEM_CUSTOM_ALLOC    rt_malloc
     #define LV_MEM_CUSTOM_FREE     rt_free
     #define LV_MEM_CUSTOM_REALLOC  rt_realloc
 #else
-    #define LV_MEM_SIZE (32U * 1024U)
-    #define LV_MEM_ADR  0
+    #define LV_MEM_SIZE IS62WV51216_LVGL_MEM_SIZE
+    #define LV_MEM_ADR  0x68000000
     #define LV_MEM_AUTO_DEFRAG 1
 #endif
 #define LV_MEMCPY_MEMSET_STD 0
@@ -122,11 +123,11 @@
  *===================*/
 #define LV_FONT_MONTSERRAT_8     0
 #define LV_FONT_MONTSERRAT_10    0
-#define LV_FONT_MONTSERRAT_12    0
+#define LV_FONT_MONTSERRAT_12    1
 #define LV_FONT_MONTSERRAT_14    1
 #define LV_FONT_MONTSERRAT_16    1
 #define LV_FONT_MONTSERRAT_18    0
-#define LV_FONT_MONTSERRAT_20    0
+#define LV_FONT_MONTSERRAT_20    1
 #define LV_FONT_MONTSERRAT_22    0
 #define LV_FONT_MONTSERRAT_24    0
 #define LV_FONT_MONTSERRAT_26    0
@@ -143,7 +144,7 @@
 #define LV_FONT_MONTSERRAT_46    0
 #define LV_FONT_MONTSERRAT_48    0
 #define LV_FONT_DEJAVU_16_PERSIAN_HEBREW 0
-#define LV_FONT_SIMSUN_16_CJK            0
+#define LV_FONT_SIMSUN_16_CJK            1
 #define LV_FONT_UNSCII_8         0
 #define LV_FONT_UNSCII_16        0
 #define LV_FONT_CUSTOM_DECLARE

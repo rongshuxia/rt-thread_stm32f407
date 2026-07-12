@@ -1,309 +1,296 @@
+/*
+ * Network status monitor UI — LVGL v8, dark tech theme, flex layout.
+ * Screen: 240 x 320 (ILI9341 portrait).
+ */
+
+#include "app_ui.h"
 #include "lv_port.h"
 #include "eth_camera.h"
 #include "lvgl.h"
+#include <rtthread.h>
 #include <lwip/netif.h>
+#include <lwip/ip4_addr.h>
 
-#define UI_REFRESH_MS           500
-#define UI_TOAST_DURATION_MS      3000
+#define UI_TXT_CONNECTED     "\xE5\xB7\xB2\xE8\xBF\x9E\xE6\x8E\xA5"
+#define UI_TXT_CONNECTING    "\xE8\xBF\x9E\xE6\x8E\xA5\xE4\xB8\xAD"
+#define UI_TXT_DISCONNECTED  "\xE5\xB7\xB2\xE6\x96\xAD\xE5\xBC\x80"
+#define UI_TXT_NO_CONN       "\xE6\x9C\xAA\xE8\xBF\x9E\xE6\x8E\xA5"
+#define UI_TXT_CONNECTING_IP "\xE8\xBF\x9E\xE6\x8E\xA5\xE4\xB8\xAD..."
 
-#define UI_COLOR_BG             0x1A1A2E
-#define UI_COLOR_CARD           0x252542
-#define UI_COLOR_ACCENT         0x4ECDC4
-#define UI_COLOR_TEXT           0xF0F0F5
-#define UI_COLOR_TEXT_DIM       0x9090A8
-#define UI_COLOR_READY          0x2ECC71
-#define UI_COLOR_LIVE           0x4ECDC4
-#define UI_COLOR_OFFLINE        0xE74C3C
+#define UI_REFRESH_MS        500
 
-typedef enum
-{
-    UI_STATE_OFFLINE = 0,
-    UI_STATE_READY,
-    UI_STATE_LIVE,
-} ui_state_t;
+/* Palette */
+#define UI_CLR_BG_TOP        0x1A1F2C
+#define UI_CLR_BG_BOT        0x12161F
+#define UI_CLR_CARD          0x252D3A
+#define UI_CLR_CARD_BORDER   0x323C4D
+#define UI_CLR_TEXT          0xE8EDF4
+#define UI_CLR_TEXT_DIM      0x8B95A5
+#define UI_CLR_LED_CONNECTED 0x10B981
+#define UI_CLR_LED_CONNECTING 0xF59E0B
+#define UI_CLR_LED_DISCONNECTED 0xEF4444
 
+/* Widget handles */
+static lv_obj_t *card_panel;
 static lv_obj_t *status_led;
 static lv_obj_t *status_label;
 static lv_obj_t *ip_label;
-static lv_obj_t *hint_label;
-static lv_obj_t *toast_banner;
-static lv_obj_t *toast_label;
-static lv_timer_t *toast_hide_timer;
 
-static ui_state_t app_ui_get_state(void)
+/* Styles */
+static lv_style_t style_scr;
+static lv_style_t style_card;
+static lv_style_t style_title;
+static lv_style_t style_ip;
+static lv_style_t style_caption;
+static lv_style_t style_status;
+static lv_style_t style_led;
+static lv_style_t style_divider;
+static lv_style_t style_footer;
+static bool styles_ready;
+
+static void network_gui_init_styles(void)
 {
-    if ((netif_default == RT_NULL) || !netif_is_link_up(netif_default))
+    if (styles_ready)
     {
-        return UI_STATE_OFFLINE;
+        return;
     }
 
-    if (eth_camera_is_streaming())
-    {
-        return UI_STATE_LIVE;
-    }
+    lv_style_init(&style_scr);
+    lv_style_set_bg_color(&style_scr, lv_color_hex(UI_CLR_BG_TOP));
+    lv_style_set_bg_grad_color(&style_scr, lv_color_hex(UI_CLR_BG_BOT));
+    lv_style_set_bg_grad_dir(&style_scr, LV_GRAD_DIR_VER);
+    lv_style_set_bg_opa(&style_scr, LV_OPA_COVER);
+    lv_style_set_border_width(&style_scr, 0);
+    lv_style_set_pad_all(&style_scr, 0);
 
-    return UI_STATE_READY;
+    lv_style_init(&style_card);
+    lv_style_set_bg_color(&style_card, lv_color_hex(UI_CLR_CARD));
+    lv_style_set_bg_opa(&style_card, LV_OPA_COVER);
+    lv_style_set_border_color(&style_card, lv_color_hex(UI_CLR_CARD_BORDER));
+    lv_style_set_border_width(&style_card, 1);
+    lv_style_set_border_opa(&style_card, LV_OPA_60);
+    lv_style_set_radius(&style_card, 12);
+    lv_style_set_pad_all(&style_card, 20);
+    lv_style_set_pad_row(&style_card, 12);
+    lv_style_set_shadow_width(&style_card, 20);
+    lv_style_set_shadow_ofs_y(&style_card, 8);
+    lv_style_set_shadow_opa(&style_card, LV_OPA_30);
+    lv_style_set_shadow_color(&style_card, lv_color_hex(0x000000));
+
+    lv_style_init(&style_title);
+    lv_style_set_text_color(&style_title, lv_color_hex(UI_CLR_TEXT_DIM));
+    lv_style_set_text_font(&style_title, &lv_font_montserrat_12);
+    lv_style_set_text_letter_space(&style_title, 1);
+
+    lv_style_init(&style_ip);
+    lv_style_set_text_color(&style_ip, lv_color_hex(UI_CLR_TEXT));
+    lv_style_set_text_font(&style_ip, &lv_font_montserrat_20);
+    lv_style_set_text_align(&style_ip, LV_TEXT_ALIGN_CENTER);
+
+    lv_style_init(&style_caption);
+    lv_style_set_text_color(&style_caption, lv_color_hex(UI_CLR_TEXT_DIM));
+    lv_style_set_text_font(&style_caption, &lv_font_montserrat_12);
+    lv_style_set_text_letter_space(&style_caption, 1);
+
+    lv_style_init(&style_status);
+    lv_style_set_text_color(&style_status, lv_color_hex(UI_CLR_TEXT));
+    lv_style_set_text_font(&style_status, &lv_font_simsun_16_cjk);
+
+    lv_style_init(&style_led);
+    lv_style_set_bg_color(&style_led, lv_color_hex(UI_CLR_LED_DISCONNECTED));
+    lv_style_set_bg_opa(&style_led, LV_OPA_COVER);
+    lv_style_set_border_width(&style_led, 0);
+    lv_style_set_radius(&style_led, LV_RADIUS_CIRCLE);
+    lv_style_set_shadow_width(&style_led, 8);
+    lv_style_set_shadow_spread(&style_led, 1);
+    lv_style_set_shadow_opa(&style_led, LV_OPA_50);
+
+    lv_style_init(&style_divider);
+    lv_style_set_bg_color(&style_divider, lv_color_hex(UI_CLR_CARD_BORDER));
+    lv_style_set_bg_opa(&style_divider, LV_OPA_40);
+    lv_style_set_border_width(&style_divider, 0);
+    lv_style_set_radius(&style_divider, 0);
+
+    lv_style_init(&style_footer);
+    lv_style_set_text_color(&style_footer, lv_color_hex(UI_CLR_TEXT_DIM));
+    lv_style_set_text_font(&style_footer, &lv_font_montserrat_12);
+
+    styles_ready = true;
 }
 
-static void app_ui_apply_state(ui_state_t state)
+void network_gui_set_led_color(uint32_t color_hex)
 {
-    switch (state)
+    if (status_led == RT_NULL)
     {
-    case UI_STATE_OFFLINE:
-        lv_led_set_color(status_led, lv_color_hex(UI_COLOR_OFFLINE));
-        lv_label_set_text(status_label, "Offline");
-        lv_label_set_text(hint_label, "Check network cable");
-        lv_obj_add_flag(ip_label, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    lv_obj_set_style_bg_color(status_led, lv_color_hex(color_hex), LV_PART_MAIN);
+    lv_obj_set_style_shadow_color(status_led, lv_color_hex(color_hex), LV_PART_MAIN);
+}
+
+void network_gui_set_status(net_ui_status_t status)
+{
+    const char *text;
+    uint32_t led_color;
+
+    if (status_label == RT_NULL)
+    {
+        return;
+    }
+
+    switch (status)
+    {
+    case NET_UI_CONNECTED:
+        text = UI_TXT_CONNECTED;
+        led_color = UI_CLR_LED_CONNECTED;
         break;
-
-    case UI_STATE_READY:
-        lv_led_set_color(status_led, lv_color_hex(UI_COLOR_READY));
-        lv_label_set_text(status_label, "Ready");
-        lv_label_set_text(hint_label, "Waiting for client");
-        lv_obj_clear_flag(ip_label, LV_OBJ_FLAG_HIDDEN);
+    case NET_UI_CONNECTING:
+        text = UI_TXT_CONNECTING;
+        led_color = UI_CLR_LED_CONNECTING;
         break;
-
-    case UI_STATE_LIVE:
-        lv_led_set_color(status_led, lv_color_hex(UI_COLOR_LIVE));
-        lv_label_set_text(status_label, "Live");
-        lv_label_set_text(hint_label, "Streaming video");
-        lv_obj_clear_flag(ip_label, LV_OBJ_FLAG_HIDDEN);
+    default:
+        text = UI_TXT_DISCONNECTED;
+        led_color = UI_CLR_LED_DISCONNECTED;
         break;
     }
+
+    lv_label_set_text(status_label, text);
+    network_gui_set_led_color(led_color);
 }
 
-static void app_ui_update_ip(void)
+void network_gui_set_ip(const char *ip_text)
 {
-    const char *ip_str = "--";
-
-    if (netif_default != RT_NULL)
+    if (ip_label == RT_NULL)
     {
-        ip_str = ipaddr_ntoa(&netif_default->ip_addr);
+        return;
     }
 
-    lv_label_set_text_fmt(ip_label, "%s", ip_str);
+    lv_label_set_text(ip_label, (ip_text != RT_NULL) ? ip_text : UI_TXT_NO_CONN);
 }
 
-static void app_ui_toast_hide_cb(lv_timer_t *timer)
+static lv_obj_t *network_gui_create_divider(lv_obj_t *parent, lv_coord_t w, lv_coord_t h)
 {
-    lv_obj_fade_out(toast_banner, 250, 0);
-    lv_obj_add_flag(toast_banner, LV_OBJ_FLAG_HIDDEN);
-    toast_hide_timer = RT_NULL;
-    (void)timer;
+    lv_obj_t *line = lv_obj_create(parent);
+
+    lv_obj_remove_style_all(line);
+    lv_obj_add_style(line, &style_divider, LV_PART_MAIN);
+    lv_obj_set_size(line, w, h);
+    lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
+
+    return line;
 }
 
-static void app_ui_show_toast(const char *text, uint32_t bg_color)
+void create_network_gui(void)
 {
-    if (toast_hide_timer != RT_NULL)
-    {
-        lv_timer_del(toast_hide_timer);
-        toast_hide_timer = RT_NULL;
-    }
+    lv_obj_t *scr;
+    lv_obj_t *title;
+    lv_obj_t *ip_caption;
+    lv_obj_t *status_row;
+    lv_obj_t *footer;
 
-    lv_label_set_text(toast_label, text);
-    lv_obj_set_style_bg_color(toast_banner, lv_color_hex(bg_color), LV_PART_MAIN);
-    lv_obj_clear_flag(toast_banner, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(toast_banner);
-    lv_obj_fade_in(toast_banner, 250, 0);
+    network_gui_init_styles();
 
-    toast_hide_timer = lv_timer_create(app_ui_toast_hide_cb, UI_TOAST_DURATION_MS, RT_NULL);
-    lv_timer_set_repeat_count(toast_hide_timer, 1);
-}
+    scr = lv_scr_act();
+    lv_obj_remove_style_all(scr);
+    lv_obj_add_style(scr, &style_scr, LV_PART_MAIN);
+    lv_obj_set_size(scr, LV_HOR_RES, LV_VER_RES);
+    lv_obj_set_flex_flow(scr, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(scr, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(scr, 16, LV_PART_MAIN);
+    lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
-static void app_ui_on_state_changed(ui_state_t old_state, ui_state_t new_state)
-{
-    char msg[64];
-    const char *ip_str = "--";
+    card_panel = lv_obj_create(scr);
+    lv_obj_remove_style_all(card_panel);
+    lv_obj_add_style(card_panel, &style_card, LV_PART_MAIN);
+    lv_obj_set_width(card_panel, LV_HOR_RES - 32);
+    lv_obj_set_height(card_panel, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(card_panel, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card_panel, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(card_panel, LV_OBJ_FLAG_SCROLLABLE);
 
-    if (netif_default != RT_NULL)
-    {
-        ip_str = ipaddr_ntoa(&netif_default->ip_addr);
-    }
+    title = lv_label_create(card_panel);
+    lv_obj_add_style(title, &style_title, LV_PART_MAIN);
+    lv_label_set_text(title, "Network Status");
 
-    if ((old_state == UI_STATE_OFFLINE) && (new_state == UI_STATE_READY))
-    {
-        rt_snprintf(msg, sizeof(msg), "Network Connected\n%s", ip_str);
-        app_ui_show_toast(msg, UI_COLOR_READY);
-    }
-    else if ((old_state != UI_STATE_LIVE) && (new_state == UI_STATE_LIVE))
-    {
-        app_ui_show_toast("Client Connected\nStreaming started", UI_COLOR_LIVE);
-    }
-    else if ((old_state != UI_STATE_OFFLINE) && (new_state == UI_STATE_OFFLINE))
-    {
-        app_ui_show_toast("Network Disconnected", UI_COLOR_OFFLINE);
-    }
-}
+    network_gui_create_divider(card_panel, lv_pct(100), 1);
 
-static void app_ui_refresh_cb(lv_timer_t *timer)
-{
-    static ui_state_t last_state = (ui_state_t)-1;
+    ip_caption = lv_label_create(card_panel);
+    lv_obj_add_style(ip_caption, &style_caption, LV_PART_MAIN);
+    lv_label_set_text(ip_caption, "LOCAL IP");
 
-    ui_state_t state = app_ui_get_state();
+    ip_label = lv_label_create(card_panel);
+    lv_obj_add_style(ip_label, &style_ip, LV_PART_MAIN);
+    lv_obj_set_width(ip_label, lv_pct(100));
+    lv_label_set_long_mode(ip_label, LV_LABEL_LONG_CLIP);
+    lv_label_set_text(ip_label, UI_TXT_NO_CONN);
 
-    if (last_state == (ui_state_t)-1)
-    {
-        last_state = state;
-    }
-    else if (state != last_state)
-    {
-        app_ui_on_state_changed(last_state, state);
-        app_ui_apply_state(state);
-        last_state = state;
-    }
+    network_gui_create_divider(card_panel, lv_pct(100), 1);
 
-    if (state != UI_STATE_OFFLINE)
-    {
-        app_ui_update_ip();
-    }
+    status_row = lv_obj_create(card_panel);
+    lv_obj_remove_style_all(status_row);
+    lv_obj_set_size(status_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(status_row, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(status_row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_column(status_row, 10, LV_PART_MAIN);
+    lv_obj_set_flex_flow(status_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(status_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(status_row, LV_OBJ_FLAG_SCROLLABLE);
 
-    (void)timer;
-}
-
-static lv_obj_t *app_ui_create_camera_icon(lv_obj_t *parent)
-{
-    lv_obj_t *icon = lv_obj_create(parent);
-
-    lv_obj_set_size(icon, 80, 64);
-    lv_obj_set_style_bg_opa(icon, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(icon, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(icon, 0, LV_PART_MAIN);
-    lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *body = lv_obj_create(icon);
-    lv_obj_set_size(body, 60, 44);
-    lv_obj_set_style_bg_color(body, lv_color_hex(UI_COLOR_CARD), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(body, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_border_color(body, lv_color_hex(UI_COLOR_ACCENT), LV_PART_MAIN);
-    lv_obj_set_style_border_width(body, 2, LV_PART_MAIN);
-    lv_obj_set_style_radius(body, 8, LV_PART_MAIN);
-    lv_obj_align(body, LV_ALIGN_CENTER, 0, 4);
-    lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *lens = lv_obj_create(icon);
-    lv_obj_set_size(lens, 28, 28);
-    lv_obj_set_style_bg_color(lens, lv_color_hex(0x162447), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(lens, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_border_color(lens, lv_color_hex(UI_COLOR_ACCENT), LV_PART_MAIN);
-    lv_obj_set_style_border_width(lens, 2, LV_PART_MAIN);
-    lv_obj_set_style_radius(lens, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-    lv_obj_align(lens, LV_ALIGN_CENTER, 0, 4);
-    lv_obj_clear_flag(lens, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *dot = lv_obj_create(icon);
-    lv_obj_set_size(dot, 8, 8);
-    lv_obj_set_style_bg_color(dot, lv_color_hex(UI_COLOR_ACCENT), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_border_width(dot, 0, LV_PART_MAIN);
-    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-    lv_obj_align(dot, LV_ALIGN_TOP_RIGHT, -4, 0);
-    lv_obj_clear_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
-
-    return icon;
-}
-
-static lv_obj_t *app_ui_create_status_card(lv_obj_t *parent)
-{
-    lv_obj_t *card = lv_obj_create(parent);
-
-    lv_obj_set_size(card, 216, 108);
-    lv_obj_set_style_bg_color(card, lv_color_hex(UI_COLOR_CARD), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_border_width(card, 0, LV_PART_MAIN);
-    lv_obj_set_style_radius(card, 10, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(card, 12, LV_PART_MAIN);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-
-    status_led = lv_led_create(card);
+    status_led = lv_obj_create(status_row);
+    lv_obj_remove_style_all(status_led);
+    lv_obj_add_style(status_led, &style_led, LV_PART_MAIN);
     lv_obj_set_size(status_led, 12, 12);
-    lv_led_set_brightness(status_led, 220);
-    lv_obj_align(status_led, LV_ALIGN_TOP_LEFT, 0, 2);
+    lv_obj_clear_flag(status_led, LV_OBJ_FLAG_SCROLLABLE);
 
-    status_label = lv_label_create(card);
-    lv_obj_set_style_text_color(status_label, lv_color_hex(UI_COLOR_TEXT), LV_PART_MAIN);
-    lv_obj_set_style_text_font(status_label, &lv_font_montserrat_16, LV_PART_MAIN);
-    lv_obj_align(status_label, LV_ALIGN_TOP_LEFT, 20, 0);
+    status_label = lv_label_create(status_row);
+    lv_obj_add_style(status_label, &style_status, LV_PART_MAIN);
+    lv_label_set_text(status_label, UI_TXT_DISCONNECTED);
 
-    ip_label = lv_label_create(card);
-    lv_obj_set_style_text_color(ip_label, lv_color_hex(UI_COLOR_ACCENT), LV_PART_MAIN);
-    lv_obj_set_style_text_font(ip_label, &lv_font_montserrat_16, LV_PART_MAIN);
-    lv_obj_align(ip_label, LV_ALIGN_TOP_LEFT, 0, 32);
+    footer = lv_label_create(card_panel);
+    lv_obj_add_style(footer, &style_footer, LV_PART_MAIN);
+    lv_label_set_text_fmt(footer, "320x240 · Port %d", ETH_PORT);
 
-    hint_label = lv_label_create(card);
-    lv_obj_set_style_text_color(hint_label, lv_color_hex(UI_COLOR_TEXT_DIM), LV_PART_MAIN);
-    lv_obj_set_style_text_font(hint_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_align(hint_label, LV_ALIGN_TOP_LEFT, 0, 58);
-
-    return card;
+    network_gui_set_status(NET_UI_DISCONNECTED);
+    network_gui_set_ip(UI_TXT_NO_CONN);
 }
 
-static void app_ui_create_toast(lv_obj_t *parent)
+void network_gui_refresh(void)
 {
-    toast_banner = lv_obj_create(parent);
-    lv_obj_set_size(toast_banner, 220, 52);
-    lv_obj_align(toast_banner, LV_ALIGN_TOP_MID, 0, 6);
-    lv_obj_set_style_bg_opa(toast_banner, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_border_width(toast_banner, 0, LV_PART_MAIN);
-    lv_obj_set_style_radius(toast_banner, 8, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(toast_banner, 8, LV_PART_MAIN);
-    lv_obj_clear_flag(toast_banner, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(toast_banner, LV_OBJ_FLAG_HIDDEN);
+    net_ui_status_t status = NET_UI_DISCONNECTED;
+    const char *ip_text = UI_TXT_NO_CONN;
 
-    toast_label = lv_label_create(toast_banner);
-    lv_obj_set_width(toast_label, 200);
-    lv_label_set_long_mode(toast_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_color(toast_label, lv_color_hex(UI_COLOR_TEXT), LV_PART_MAIN);
-    lv_obj_set_style_text_font(toast_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_align(toast_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-    lv_obj_center(toast_label);
+    if ((netif_default != RT_NULL) && netif_is_link_up(netif_default))
+    {
+        if (ip4_addr_isany(netif_ip4_addr(netif_default)))
+        {
+            status = NET_UI_CONNECTING;
+            ip_text = UI_TXT_CONNECTING_IP;
+        }
+        else
+        {
+            status = NET_UI_CONNECTED;
+            ip_text = ipaddr_ntoa(&netif_default->ip_addr);
+        }
+    }
+
+    network_gui_set_status(status);
+    network_gui_set_ip(ip_text);
 }
 
-/*
- * LVGL 用户界面入口（覆盖 lv_port.c 中的 weak 默认实现）。
- *
- * 产品待机界面：品牌信息、网络/推流状态、设备 IP。
- */
+static void network_gui_refresh_cb(lv_timer_t *timer)
+{
+    network_gui_refresh();
+    (void)timer;
+}
+
 void lv_user_app(void)
 {
-    lv_obj_t *icon;
-    lv_obj_t *title;
-    lv_obj_t *subtitle;
-    lv_obj_t *card;
-    lv_obj_t *footer;
     lv_timer_t *refresh_timer;
 
-    lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(UI_COLOR_BG), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(lv_scr_act(), LV_OPA_COVER, LV_PART_MAIN);
+    create_network_gui();
+    network_gui_refresh();
 
-    icon = app_ui_create_camera_icon(lv_scr_act());
-    lv_obj_align(icon, LV_ALIGN_TOP_MID, 0, 28);
-
-    title = lv_label_create(lv_scr_act());
-    lv_label_set_text(title, "Network Camera");
-    lv_obj_set_style_text_color(title, lv_color_hex(UI_COLOR_TEXT), LV_PART_MAIN);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_16, LV_PART_MAIN);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 100);
-
-    subtitle = lv_label_create(lv_scr_act());
-    lv_label_set_text(subtitle, "Ethernet Video Stream");
-    lv_obj_set_style_text_color(subtitle, lv_color_hex(UI_COLOR_TEXT_DIM), LV_PART_MAIN);
-    lv_obj_set_style_text_font(subtitle, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_align(subtitle, LV_ALIGN_TOP_MID, 0, 122);
-
-    card = app_ui_create_status_card(lv_scr_act());
-    lv_obj_align(card, LV_ALIGN_CENTER, 0, 18);
-
-    app_ui_create_toast(lv_scr_act());
-
-    footer = lv_label_create(lv_scr_act());
-    lv_label_set_text_fmt(footer, "320 x 240  ·  Port %d", ETH_PORT);
-    lv_obj_set_style_text_color(footer, lv_color_hex(UI_COLOR_TEXT_DIM), LV_PART_MAIN);
-    lv_obj_set_style_text_font(footer, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_align(footer, LV_ALIGN_BOTTOM_MID, 0, -16);
-
-    app_ui_apply_state(app_ui_get_state());
-    app_ui_update_ip();
-
-    refresh_timer = lv_timer_create(app_ui_refresh_cb, UI_REFRESH_MS, RT_NULL);
+    refresh_timer = lv_timer_create(network_gui_refresh_cb, UI_REFRESH_MS, RT_NULL);
     lv_timer_set_repeat_count(refresh_timer, -1);
 }

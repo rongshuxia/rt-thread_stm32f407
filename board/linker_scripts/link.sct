@@ -1,0 +1,29 @@
+; *************************************************************
+; *** Scatter-Loading Description File for STM32F407ZG ***
+; ***
+; *** Prerequisites (Keil Target Options):
+; ***   1. Linker -> use Scatter File = this file (useFile=1)
+; ***   2. Device: remove IRAM2 from CPU string (only IRAM 128KB)
+; ***
+; *** RW_IRAM2 : CCM 64 KB @ 0x10000000 — .CCMRAM sections only
+; *** RW_IRAM1 : main SRAM 128 KB @ 0x20000000
+; ***
+; *** Default build uses at(0x10000000) in ccmram_bufs.c (useFile=0).
+; *************************************************************
+
+LR_IROM1 0x08000000 0x00100000  {
+  ER_IROM1 0x08000000 0x00100000  {
+   *.o (RESET, +First)
+   *(InRoot$$Sections)
+   .ANY (+RO)
+  }
+
+  RW_IRAM2 0x10000000 0x00010000  {
+   ccmram_bufs.o (+RW +ZI)
+   *(.CCMRAM)
+  }
+
+  RW_IRAM1 0x20000000 0x00020000  {
+   .ANY (+RW +ZI)
+  }
+}

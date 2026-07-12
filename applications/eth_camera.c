@@ -10,8 +10,54 @@
 #include <string.h>
 #include "rtt_log.h"
 
+#define CAM_SRV_STACK_SIZE   3072
+
 struct netconn *g_newconn = 0;
 struct rt_semaphore dcmi_sem;
+
+static rt_uint8_t cam_srv_stack[CAM_SRV_STACK_SIZE];
+static struct rt_thread cam_srv_thread;
+
+static uint32_t jpeg_buf[JPEG_BUF_SIZE / sizeof(uint32_t)];
+static rt_bool_t camera_inited = RT_FALSE;
+
+static rt_thread_t s_lvgl_tid;
+
+static void eth_camera_pause_lvgl(void)
+{
+    if (s_lvgl_tid == RT_NULL)
+    {
+        s_lvgl_tid = rt_thread_find("lvgl");
+    }
+
+    if (s_lvgl_tid != RT_NULL)
+    {
+        rt_thread_suspend(s_lvgl_tid);
+    }
+}
+
+static void eth_camera_resume_lvgl(void)
+{
+    if (s_lvgl_tid != RT_NULL)
+    {
+        rt_thread_resume(s_lvgl_tid);
+    }
+}
+
+static uint32_t jpeg_frame_length(const uint8_t *buf, uint32_t max_len)
+{
+    uint32_t i;
+
+    for (i = 0; i + 1U < max_len; i++)
+    {
+        if (buf[i] == 0xFF && buf[i + 1U] == 0xD9)
+        {
+            return i + 2U;
+        }
+    }
+
+    return 0;
+}
 
 static struct netconn *eth_camera_listen_create(void)
 {
@@ -67,7 +113,6 @@ static void eth_camera_server_thread(void *param)
     ip_addr_t ipaddr;
     uint8_t remot_addr[4];
     u16_t port;
-    uint32_t *jpeg_buf;
     uint32_t jpeg_len;
 
     (void)param;
@@ -87,6 +132,14 @@ static void eth_camera_server_thread(void *param)
 
         RTT_LOG_W("TCP listen retry in 1s...");
         rt_thread_mdelay(1000);
+    }
+
+    if (!camera_inited)
+    {
+        eth_camera_init();
+        camera_inited = RT_TRUE;
+        RTT_LOG_I("jpeg buffer at 0x%08X (%u bytes)", (uint32_t)jpeg_buf, JPEG_BUF_SIZE);
+        rt_thread_mdelay(500);
     }
 
     while (1)
@@ -109,51 +162,57 @@ static void eth_camera_server_thread(void *param)
         RTT_LOG_I("Host %d.%d.%d.%d:%d connected",
                   remot_addr[0], remot_addr[1], remot_addr[2], remot_addr[3], port);
 
-        eth_camera_init();
-
-        jpeg_buf = (uint32_t *)rt_malloc(JPEG_BUF_SIZE);
-        if (jpeg_buf == RT_NULL)
-        {
-            RTT_LOG_E("jpeg buffer alloc failed");
-            netconn_close(client);
-            netconn_delete(client);
-            g_newconn = RT_NULL;
-            continue;
-        }
-
-        rt_thread_mdelay(1000);
+        rt_thread_mdelay(200);
 
         while (1)
         {
-            jpeg_len = JPEG_BUF_SIZE / (sizeof(uint32_t));
+            uint8_t ret;
+
             memset((void *)jpeg_buf, 0, JPEG_BUF_SIZE);
 
-            atk_mc2640_get_frame((uint32_t)jpeg_buf, ATK_MC2640_GET_TYPE_DTS_32B_INC, NULL);
+            eth_camera_pause_lvgl();
+            ret = atk_mc2640_get_frame_sized((uint32_t)jpeg_buf,
+                                             ATK_MC2640_GET_TYPE_DTS_32B_INC,
+                                             NULL,
+                                             JPEG_BUF_SIZE);
+            eth_camera_resume_lvgl();
 
-            while (jpeg_len > 0)
+            if (ret != ATK_MC2640_EOK)
             {
-                if (jpeg_buf[jpeg_len - 1] != 0)
-                {
-                    break;
-                }
-
-                jpeg_len--;
+                RTT_LOG_W("capture failed, retry");
+                rt_thread_mdelay(5);
+                continue;
             }
 
-            jpeg_len *= sizeof(uint32_t);
+            jpeg_len = jpeg_frame_length((const uint8_t *)jpeg_buf, JPEG_BUF_SIZE);
 
-			RTT_LOG_I("jpeg frames size %d",jpeg_len);
+            if (jpeg_len < 100U ||
+                ((const uint8_t *)jpeg_buf)[0] != 0xFF ||
+                ((const uint8_t *)jpeg_buf)[1] != 0xD8)
+            {
+                RTT_LOG_W("jpeg invalid (len=%u, hdr=%02X %02X)", jpeg_len,
+                          ((const uint8_t *)jpeg_buf)[0],
+                          ((const uint8_t *)jpeg_buf)[1]);
+                rt_thread_mdelay(2);
+                continue;
+            }
+
+            RTT_LOG_I("jpeg frame size %u", jpeg_len);
             err = netconn_write(client, jpeg_buf, jpeg_len, NETCONN_COPY);
 
             if ((err == ERR_CLSD) || (err == ERR_RST))
             {
-                rt_free((void *)jpeg_buf);
                 netconn_close(client);
                 netconn_delete(client);
                 g_newconn = RT_NULL;
                 RTT_LOG_I("Host %d.%d.%d.%d disconnected",
                           remot_addr[0], remot_addr[1], remot_addr[2], remot_addr[3]);
                 break;
+            }
+
+            if (err != ERR_OK)
+            {
+                RTT_LOG_W("netconn_write err=%d", err);
             }
 
             rt_thread_mdelay(2);
@@ -163,23 +222,27 @@ static void eth_camera_server_thread(void *param)
 
 void eth_camera_capture(void)
 {
-    rt_thread_t tid;
+    rt_err_t ret;
 
     rt_sem_init(&dcmi_sem, "dcmi_sem", 0, RT_IPC_FLAG_PRIO);
 
-    tid = rt_thread_create("cam_srv",
-                           eth_camera_server_thread,
-                           RT_NULL,
-                           4096,
-                           15,
-                           10);
-    if (tid != RT_NULL)
+    ret = rt_thread_init(&cam_srv_thread,
+                         "cam_srv",
+                         eth_camera_server_thread,
+                         RT_NULL,
+                         cam_srv_stack,
+                         sizeof(cam_srv_stack),
+                         15,
+                         10);
+    if (ret == RT_EOK)
     {
-        rt_thread_startup(tid);
+        rt_thread_startup(&cam_srv_thread);
+        RTT_LOG_I("cam_srv started (stack %u, jpeg %u KB)",
+                  CAM_SRV_STACK_SIZE, JPEG_BUF_SIZE / 1024U);
     }
     else
     {
-        RTT_LOG_E("failed to create cam_srv thread");
+        RTT_LOG_E("failed to create cam_srv thread: %d", ret);
     }
 }
 

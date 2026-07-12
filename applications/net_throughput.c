@@ -10,6 +10,7 @@
 
 #include "net_throughput.h"
 #include "rtt_log.h"
+#include "ccmram_bufs.h"
 
 #include <lwip/netif.h>
 #include <lwip/sockets.h>
@@ -17,18 +18,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define NETPERF_BUF_SIZE        4096
 #define NETPERF_REPORT_MS       1000
-
-static uint8_t netperf_buf[NETPERF_BUF_SIZE];
 
 static void netperf_fill_buf(void)
 {
     rt_size_t i;
 
-    for (i = 0; i < NETPERF_BUF_SIZE; i++)
+    for (i = 0; i < CCM_NETPERF_BUF_SIZE; i++)
     {
-        netperf_buf[i] = (uint8_t)(i & 0xFF);
+        ccm_netperf_buf[i] = (uint8_t)(i & 0xFF);
     }
 }
 
@@ -174,7 +172,7 @@ int netperf_tcp_server(int port, int duration_sec)
 
     while ((int)((rt_tick_get() - start_tick) * 1000 / RT_TICK_PER_SECOND) < duration_ms)
     {
-        recv_len = recv(client_fd, netperf_buf, NETPERF_BUF_SIZE, 0);
+        recv_len = recv(client_fd, ccm_netperf_buf, CCM_NETPERF_BUF_SIZE, 0);
         if (recv_len <= 0)
         {
             break;
@@ -271,7 +269,7 @@ int netperf_tcp_client(const char *host, int port, int duration_sec)
 
     while ((int)((rt_tick_get() - start_tick) * 1000 / RT_TICK_PER_SECOND) < duration_ms)
     {
-        send_len = send(sock_fd, netperf_buf, NETPERF_BUF_SIZE, 0);
+        send_len = send(sock_fd, ccm_netperf_buf, CCM_NETPERF_BUF_SIZE, 0);
         if (send_len <= 0)
         {
             break;

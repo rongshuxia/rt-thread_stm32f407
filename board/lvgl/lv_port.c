@@ -3,13 +3,20 @@
  *
  * - Tick is sourced from rt_tick_get() (RT_TICK_PER_SECOND must be 1000).
  * - Display: ILI9341 over FSMC, 240x320 portrait, 16bpp.
- * - Single draw buffer of 1/10 screen lives in static SRAM (~15 KB).
+ * - Draw buffer in CCM (~15 KB) to save main SRAM.
+ * - LVGL heap pool on external IS62WV51216 SRAM (768 KB).
  * - Flush + task handler run inside a dedicated RT-Thread "lvgl" thread.
  */
 
 #include "lv_port.h"
 #include "lvgl.h"
 #include "ili9341.h"
+#include "ccmram_bufs.h"
+#include <rtconfig.h>
+
+#ifdef BSP_USING_IS62WV51216
+#include "is62wv51216.h"
+#endif
 
 #define LV_THREAD_STACK_SIZE  4096
 #define LV_THREAD_PRIORITY    11
@@ -22,12 +29,10 @@
 
 uint32_t lv_port_tick_get(void)
 {
-    /* rt_tick_get() returns ticks; with RT_TICK_PER_SECOND=1000 that's ms. */
     return (uint32_t)(rt_tick_get() * 1000U / RT_TICK_PER_SECOND);
 }
 
 static lv_disp_draw_buf_t draw_buf;
-static lv_color_t  buf_1[DISP_BUF_PIXELS];
 
 static void disp_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p)
 {
@@ -41,7 +46,7 @@ static void disp_init(void)
 {
     static lv_disp_drv_t disp_drv;
 
-    lv_disp_draw_buf_init(&draw_buf, buf_1, RT_NULL, DISP_BUF_PIXELS);
+    lv_disp_draw_buf_init(&draw_buf, ccm_lv_draw_buf, RT_NULL, DISP_BUF_PIXELS);
 
     lv_disp_drv_init(&disp_drv);
     disp_drv.hor_res  = DISP_HOR;
@@ -51,7 +56,6 @@ static void disp_init(void)
     lv_disp_drv_register(&disp_drv);
 }
 
-/* Default no-op UI hook. User overrides this in their own code. */
 RT_WEAK void lv_user_app(void)
 {
     lv_obj_t *label = lv_label_create(lv_scr_act());
@@ -64,13 +68,16 @@ static void lvgl_thread_entry(void *p)
 {
     (void)p;
 
+#ifdef BSP_USING_IS62WV51216
+    is62wv51216_init();
+#endif
+
     lv_init();
     ili9341_init();
     disp_init();
 
     lv_user_app();
 
-    /* Force a full-screen first paint to avoid partial-buffer artifacts. */
     lv_obj_invalidate(lv_scr_act());
     lv_refr_now(NULL);
 

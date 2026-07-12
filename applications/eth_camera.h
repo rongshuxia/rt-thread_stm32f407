@@ -4,7 +4,7 @@
 
 #define JPEG_WIDTH_320			  	320
 #define JPEG_HEIGHT_240			 	240
-#define JPEG_BUF_SIZE  				(16 * 1024)
+#define JPEG_BUF_SIZE  				(32 * 1024)
 
 
 #define ETH_PORT					8001
@@ -16,4 +16,3 @@ void eth_camera_capture(void);
 int eth_camera_is_streaming(void);
 
 #endif
-
